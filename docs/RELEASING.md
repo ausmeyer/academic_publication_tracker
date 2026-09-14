@@ -23,7 +23,9 @@ On macOS:
 npm run dist:mac
 ```
 
-This creates separate Apple Silicon (`arm64`) and Intel (`x64`) DMGs and ZIP archives in `release/`. Open a DMG and drag the app to Applications. ZIPs contain the complete `.app` bundle.
+This creates ad-hoc-signed preview builds for Apple Silicon (`arm64`) and Intel (`x64`): DMGs and ZIP archives in `release/`. Open a DMG and drag the app to Applications. ZIPs contain the complete `.app` bundle.
+
+For a repository inside Google Drive or another synced folder, build outside that folder to prevent Finder metadata from invalidating signatures. After `npm run build`, pass `--config.directories.output=/absolute/local/build-folder` to `electron-builder`, then pass both resulting `.app` paths to `scripts/verify-mac-signatures.mjs`. Copy the finished DMGs/ZIPs back; keep the app bundles outside synchronization.
 
 On Windows:
 
@@ -37,13 +39,21 @@ Use each platform's native build environment for release verification. Creating 
 
 ## Signing
 
-Unsigned local builds are supported. They trigger macOS Gatekeeper or Windows SmartScreen warnings and are not a frictionless public release. Do not describe an unsigned build as signed, notarized, or independently verified.
+Mac preview builds use `electron-builder.preview.yml` to sign the complete app and nested code with an ad-hoc signature. This seals the bundle against accidental modification; it does not identify a trusted Apple developer or notarize the app. Preview users may still need a security exception. Windows preview builds remain unsigned.
+
+`npm run dist:mac` verifies both app bundles with `codesign --verify --deep --strict`. The missing resource seal in v0.4.2 fails this check. A successful local launch is not evidence that a browser-downloaded app passes Gatekeeper.
+
+For a public Mac build, run `npm run dist:mac:signed`. The main configuration requires a signing identity, and the command additionally checks the Apple signature, stapled notarization ticket, and Gatekeeper assessment. Missing credentials or failed verification stop the release. Do not describe an ad-hoc build as Developer ID signed or notarized.
 
 For macOS distribution, supply an Apple Developer ID Application certificate through `CSC_LINK` and `CSC_KEY_PASSWORD`, plus `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` for notarization. Electron Builder performs the configured signing/notarization when valid credentials are present. Signing requires the maintainer's Apple Developer membership; no credentials are bundled or committed.
 
+For local signing, Xcode can create and install the Developer ID Application certificate under **Settings → Apple Accounts → your paid team → Manage Certificates → +**. Keep its private key in the login keychain. The certificate does not need to be exported for a local build.
+
+Notarization credentials can also remain in the keychain. Run `xcrun notarytool store-credentials academic-publication-tracker` interactively, entering the Apple account, team ID, and app-specific password at its prompts. Then use `APPLE_KEYCHAIN_PROFILE=academic-publication-tracker npm run dist:mac:signed`. Never put passwords in command arguments, source files, or chat. [Apple certificate instructions](https://developer.apple.com/help/account/certificates/create-developer-id-certificates).
+
 For Windows, supply the code-signing certificate through `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`. Follow your certificate issuer's signing requirements; hardware-backed or cloud signing certificates can require an additional signing integration. Never place signing secrets in the repository.
 
-The workflow reads these values from repository secrets. Pull requests from forks cannot access signing secrets. Without configured certificates, the generated installers are unsigned and should be identified accordingly in release notes.
+The workflow reads these values from repository secrets. Pull requests from forks cannot access signing secrets. Without a Mac certificate, the workflow explicitly selects the ad-hoc preview configuration. Empty secret values are unset before invoking the builder. Release notes must state the signing status.
 
 ## GitHub workflow
 

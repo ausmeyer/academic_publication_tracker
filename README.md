@@ -8,6 +8,6 @@ An open-source desktop app for finding publications, tracking citations, and org
 - [macOS — Intel](https://github.com/ausmeyer/academic_publication_tracker/releases/download/v0.4.2/Academic-Publication-Tracker-0.4.2-mac-x64.dmg)
 - [Windows — x64](https://github.com/ausmeyer/academic_publication_tracker/releases/download/v0.4.2/Academic-Publication-Tracker-0.4.2-win-x64.exe)
 
-Unsigned preview builds. Windows installation testing is pending.
+**Mac v0.4.2 has an installation defect; a signed replacement is being prepared.** Windows is an unsigned preview.
 
 [User guide](docs/USER_GUIDE.md) · [MIT license](LICENSE)

@@ -1,6 +1,6 @@
 {
   "name": "academic-publication-tracker",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "description": "An open-source desktop workspace for scholarly discovery and transparent citation metrics.",
   "author": "Academic Publication Tracker contributors",
@@ -15,12 +15,13 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "desktop": "npm run build && electron .",
-    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --config electron-builder.preview.yml --publish never && node scripts/verify-mac-signatures.mjs",
     "dist:win": "npm run build && electron-builder --win --x64 --publish never",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:desktop": "npm run build && node scripts/smoke-electron.mjs",
-    "test:scholar": "npm run build && node scripts/smoke-scholar.mjs"
+    "test:scholar": "npm run build && node scripts/smoke-scholar.mjs",
+    "dist:mac:signed": "npm run build && electron-builder --mac --publish never && node scripts/verify-mac-signatures.mjs --distribution"
   },
   "dependencies": {
     "fast-xml-parser": "^5.11.1",

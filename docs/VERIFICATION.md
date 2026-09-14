@@ -1,6 +1,17 @@
-# Verification record — version 0.4.2
+# Verification record — version 0.4.3
 
 Checks were performed on macOS Apple Silicon on September 14, 2026, using Node.js 26.7.0 and npm 11.19.0. The GitHub workflow also specifies native macOS and Windows runners with Node.js 24.
+
+## Version 0.4.3 Mac packaging correction
+
+The installed v0.4.2 app and original local Mac bundle failed strict signature verification with “code has no resources but signature indicates they must be present.” The installed app carried Chrome quarantine metadata. This was a packaging defect, not an acceptable unsigned-build outcome; the earlier local launch checks did not test downloaded-app trust.
+
+- Both rebuilt Mac app bundles pass complete, strict signature verification. Apple Silicon and Intel (under Rosetta) packaged desktop checks pass; the Apple Silicon packaged Scholar checks pass.
+- Both DMGs pass integrity verification. The app copied from the Apple Silicon DMG passes strict verification, including after explicitly adding quarantine metadata to simulate an internet download.
+- A disposable copy with an altered `app.asar` is correctly rejected by the new verification script. Distribution mode also correctly rejects an ad-hoc preview.
+- Gatekeeper still rejects the ad-hoc preview. Developer ID signing, Apple notarization, and normal downloaded-app launch are pending certificate setup. No system security setting or quarantine exception was changed.
+- Google Drive added disallowed Finder metadata during a local in-place build. Final candidate bundles were built outside the synced directory, and only installer archives are copied back.
+- The first GitHub workflow passed Windows builds and packaged tests; its Mac packaging failed because missing signing secrets became empty certificate paths. The workflow now removes empty values and explicitly chooses preview or distribution signing.
 
 ## Application checks
 
@@ -39,7 +50,7 @@ The stale screen reported during this update came from a v0.1.0 process that rem
 - Final Intel app launch passed under the host's existing Rosetta installation; physical Intel hardware was not used.
 - Both Mac DMGs and ZIP archives passed integrity checks. The Windows NSIS installer passed archive inspection and contains the expected x64 app.
 - Bundled renderer, main process, and preload bytes match the final local build; application identifiers, version, icons, and production content-security policy were checked.
-- Mac executables carry ad-hoc signatures, without Developer ID signing or notarization. Strict whole-bundle signature verification reports the missing resource seal in these unsigned builds; local launches succeeded. Windows executables have no signing certificate.
+- Mac executables carry ad-hoc signatures, without Developer ID signing or notarization. These v0.4.2 bundles had a missing resource seal despite successful local launches; this defect is addressed by the v0.4.3 checks above. Windows executables have no signing certificate.
 - `release/SHA256SUMS.txt` records checksums for the local distributables and source archive.
 
 ## Distribution limits

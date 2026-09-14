@@ -1,0 +1,7 @@
+extends: ./electron-builder.yml
+mac:
+  identity: '-'
+  hardenedRuntime: false
+  notarize: false
+dmg:
+  sign: false

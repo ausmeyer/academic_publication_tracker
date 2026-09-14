@@ -1298,7 +1298,7 @@ export default function App() {
             <span>Academic Publication Tracker</span>
             <span>
               Independent software for open scholarship{' '}
-              <span className="footer-version">v0.4.2</span>
+              <span className="footer-version">v0.4.3</span>
             </span>
           </footer>
         </main>

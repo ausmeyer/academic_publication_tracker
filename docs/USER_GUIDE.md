@@ -24,7 +24,7 @@ There is no subscription, project account, telemetry, hosted backend, or runtime
 
 ## Install
 
-When a release has been published, download the installer for your computer from this repository's **Releases** page:
+Download the installer for your computer from the [Releases page](https://github.com/ausmeyer/academic_publication_tracker/releases):
 
 | Platform                    | Package         | Installation                             |
 | --------------------------- | --------------- | ---------------------------------------- |
@@ -34,7 +34,11 @@ When a release has been published, download the installer for your computer from
 
 Artifact filenames include the app name and version before the platform suffix. Mac packages require macOS 13 or later. Each installer contains the complete runtime. You do not need Node.js, Python, or a separate database. Internet access is needed for live searches; a source-specific API key is needed only where the source requires it.
 
-Unsigned builds may display operating system security warnings. Check each release's signing status; signed macOS distribution and Windows code signing require maintainer credentials. Installer configurations and native GitHub builds are included; a package is only release-validated after installation and launch checks on its target platform.
+Mac preview builds are not notarized by Apple. After trying to open a preview downloaded from this repository, macOS may offer **System Settings → Privacy & Security → Open Anyway**. This approves that app specifically. See [Apple’s instructions](https://support.apple.com/en-us/102445). Managed Macs may not allow an exception.
+
+The v0.4.2 Mac installer has an invalid resource seal and can report that the app “is damaged.” Replace that app with a corrected build; do not treat this as an ordinary unidentified-developer warning. Replacing the app preserves saved searches in your user Library.
+
+Windows preview builds are unsigned and may trigger SmartScreen. A package is only release-validated after installation and launch checks on its target platform.
 
 ## Data sources
 

@@ -38,7 +38,17 @@ jobs:
       - name: Verify Scholar collection and isolation
         run: node scripts/smoke-scholar.mjs
       - name: Package installers
-        run: npm run dist:${{ matrix.platform }}
+        shell: bash
+        run: |
+          # Missing GitHub secrets become empty strings; the builder treats an empty CSC_LINK as a file path.
+          for name in CSC_LINK CSC_KEY_PASSWORD WIN_CSC_LINK WIN_CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name}" ]]; then unset "$name"; fi
+          done
+          if [[ "${{ matrix.platform }}" == "mac" && -n "${CSC_LINK:-}" ]]; then
+            npm run dist:mac:signed
+          else
+            npm run dist:${{ matrix.platform }}
+          fi
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}

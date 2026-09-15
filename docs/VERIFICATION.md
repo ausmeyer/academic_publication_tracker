@@ -9,9 +9,9 @@ The installed v0.4.2 app and original local Mac bundle failed strict signature v
 - Both rebuilt Mac app bundles pass complete, strict signature verification. Apple Silicon and Intel (under Rosetta) packaged desktop checks pass; the Apple Silicon packaged Scholar checks pass.
 - Both DMGs pass integrity verification. The app copied from the Apple Silicon DMG passes strict verification, including after explicitly adding quarantine metadata to simulate an internet download.
 - A disposable copy with an altered `app.asar` is correctly rejected by the new verification script. Distribution mode also correctly rejects an ad-hoc preview.
-- Gatekeeper still rejects the ad-hoc preview. Developer ID signing, Apple notarization, and normal downloaded-app launch are pending certificate setup. No system security setting or quarantine exception was changed.
+- Gatekeeper rejects the ad-hoc preview as expected. Both subsequent Mac bundles are signed with a valid Developer ID Application certificate, secure timestamps, and hardened runtime. Complete strict signature and Apple trust-chain checks pass. Packaged desktop checks pass on Apple Silicon and Intel under Rosetta; packaged Scholar checks pass on Apple Silicon. Apple notarization and downloaded-app Gatekeeper verification are still pending. No system security setting or quarantine exception was changed.
 - Google Drive added disallowed Finder metadata during a local in-place build. Final candidate bundles were built outside the synced directory, and only installer archives are copied back.
-- The first GitHub workflow passed Windows builds and packaged tests; its Mac packaging failed because missing signing secrets became empty certificate paths. The workflow now removes empty values and explicitly chooses preview or distribution signing.
+- The first GitHub workflow passed Windows builds and packaged tests; its Mac packaging failed because missing signing secrets became empty certificate paths. After the workflow removed empty values and explicitly selected preview or distribution signing, [both native platform jobs passed](https://github.com/ausmeyer/academic_publication_tracker/actions/runs/34890499980), including packaged desktop and Scholar checks.
 
 ## Application checks
 
@@ -55,9 +55,9 @@ The stale screen reported during this update came from a v0.1.0 process that rem
 
 ## Distribution limits
 
-The project includes self-contained Mac Apple Silicon, Mac Intel, and Windows x64 packaging, plus native GitHub build and launch checks. Local packages are **unsigned and not notarized**. They should not be presented as a frictionless public release until signing and clean-machine testing are complete.
+The project includes self-contained Mac Apple Silicon, Mac Intel, and Windows x64 packaging, plus native GitHub build and launch checks. The v0.4.3 Mac candidates have valid Developer ID signatures; notarization and final downloaded-installer verification remain pending. Windows remains an explicitly unsigned preview. These statuses must be stated accurately on the download page.
 
-Windows installer creation and archive inspection do not establish that installation or execution works on Windows. The native Windows workflow must run after the project is placed on GitHub, and a clean-machine installer check is still needed. These local checks preceded GitHub publication; see GitHub Actions for subsequent native platform build results.
+The native Windows workflow now passes build, application, and packaged-application checks. These checks launch the packaged executable directly; they do not exercise the NSIS installer wizard on a clean Windows computer. That clean-machine installation check remains unverified.
 
 ## Repeat the checks
 

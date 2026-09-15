@@ -59,6 +59,8 @@ The workflow reads these values from repository secrets. Pull requests from fork
 
 The desktop build workflow runs on native macOS and Windows runners, checks types, runs unit and browser tests, verifies the native desktop shell, builds installers, and launches the packaged application before uploading artifacts. The desktop smoke check uses a fresh temporary profile, makes no live API requests, and tests storage and security boundaries without opening personal credentials. Pushing a version tag such as `v0.4.0` also creates a **draft** release containing both platforms' artifacts. It does not publish the draft automatically.
 
+To inspect the native interface without owning a Windows computer, open a completed GitHub Actions run and download **Desktop-screenshots-win** from its Artifacts section. It contains the packaged app's main screen and new-search dialog captured on Windows. **Desktop-screenshots-mac** provides the corresponding Mac views. These are screenshots, not an interactive remote desktop.
+
 To smoke-test a local packaged candidate, pass its executable to `node scripts/smoke-electron.mjs`. On macOS the executable is inside the `.app` bundle at `Contents/MacOS/Academic Publication Tracker`; on Windows it is `release/win-unpacked/Academic Publication Tracker.exe`. Run `node scripts/smoke-scholar.mjs` with the same executable path to verify the packaged Scholar toolbar, isolated browser, internal paging, verification, and stop/cancel controls using intercepted synthetic pages. Both scripts also accept `--packaged` to select the local host architecture automatically. These checks do not replace testing the installer wizard or signed distribution on a clean computer.
 
 Before tagging:

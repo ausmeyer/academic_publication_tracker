@@ -59,6 +59,15 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - name: Verify packaged application
         run: node scripts/smoke-electron.mjs --packaged
+        env:
+          APT_SMOKE_SCREENSHOT: release/desktop-${{ matrix.platform }}.png
+          APT_SEARCH_SCREENSHOT: release/search-${{ matrix.platform }}.png
+      - name: Save desktop screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: Desktop-screenshots-${{ matrix.platform }}
+          if-no-files-found: error
+          path: release/*.png
       - name: Verify packaged Scholar browser
         run: node scripts/smoke-scholar.mjs --packaged
       - uses: actions/upload-artifact@v4
@@ -81,6 +90,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: installers
+          pattern: Academic-Publication-Tracker-*
           merge-multiple: true
       - name: Create draft release with installers
         env:

@@ -582,7 +582,7 @@ export default function App() {
                   : saving
                     ? 'Saving changes…'
                     : 'Stored on this device'}
-              <small>Open source. Open possibilities.</small>
+              <small>Open Source</small>
             </span>
           </div>
         </div>

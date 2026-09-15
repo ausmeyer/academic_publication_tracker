@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.3 — 2026-09-15
+
+- Fix the Mac signature resource seal that caused the damaged-app warning in v0.4.2.
+- Distribute Developer ID-signed, Apple-notarized apps for Apple Silicon and Intel Macs.
+- Verify complete signatures, notarization tickets, and Gatekeeper acceptance before Mac distribution.
+- Verify Windows installation and installed-app launch on the native GitHub runner; Windows remains an unsigned preview.
+- Include native desktop screenshots in GitHub build artifacts.
+- Simplify the footer to “Open Source.”
+
 ## 0.4.2 — 2026-09-14
 
 - Wait for Scholar results and pagination links to settle before collecting a page.

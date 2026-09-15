@@ -1,15 +1,16 @@
 # Verification record — version 0.4.3
 
-Checks were performed on macOS Apple Silicon on September 14, 2026, using Node.js 26.7.0 and npm 11.19.0. The GitHub workflow also specifies native macOS and Windows runners with Node.js 24.
+Checks were performed on macOS Apple Silicon on September 14–15, 2026, using Node.js 26.7.0 and npm 11.19.0. The GitHub workflow also specifies native macOS and Windows runners with Node.js 24.
 
 ## Version 0.4.3 Mac packaging correction
 
 The installed v0.4.2 app and original local Mac bundle failed strict signature verification with “code has no resources but signature indicates they must be present.” The installed app carried Chrome quarantine metadata. This was a packaging defect, not an acceptable unsigned-build outcome; the earlier local launch checks did not test downloaded-app trust.
 
 - Both rebuilt Mac app bundles pass complete, strict signature verification. Apple Silicon and Intel (under Rosetta) packaged desktop checks pass; the Apple Silicon packaged Scholar checks pass.
-- Both DMGs pass integrity verification. The app copied from the Apple Silicon DMG passes strict verification, including after explicitly adding quarantine metadata to simulate an internet download.
+- Both final v0.4.3 DMGs pass integrity verification. Apps copied from each DMG pass strict signature, stapled-ticket, and Gatekeeper checks after adding quarantine metadata to simulate an internet download. Both copied apps pass the isolated desktop smoke check (Intel under Rosetta). Both final ZIPs pass integrity checks; their extracted apps pass distribution verification and contain the same application bytes as the corresponding DMGs.
 - A disposable copy with an altered `app.asar` is correctly rejected by the new verification script. Distribution mode also correctly rejects an ad-hoc preview.
-- Gatekeeper rejects the ad-hoc preview as expected. Both subsequent Mac bundles are signed with a valid Developer ID Application certificate, secure timestamps, and hardened runtime. Complete strict signature and Apple trust-chain checks pass. Packaged desktop checks pass on Apple Silicon and Intel under Rosetta; packaged Scholar checks pass on Apple Silicon. Apple notarization and downloaded-app Gatekeeper verification are still pending. No system security setting or quarantine exception was changed.
+- Gatekeeper rejects the ad-hoc preview as expected. Both subsequent Mac bundles are signed with a valid Developer ID Application certificate, secure timestamps, and hardened runtime. Complete strict signature and Apple trust-chain checks pass. Packaged desktop checks pass on Apple Silicon and Intel under Rosetta; packaged Scholar checks pass on Apple Silicon. The final notarization and quarantined-installer checks are recorded below. No system security setting or quarantine exception was changed.
+- The final “Open Source” footer is included in the signed apps. Both exact app bundles submitted through Xcode pass strict resource-seal checks and packaged desktop launch checks (Intel under Rosetta). The final Apple Silicon and Intel submissions uploaded successfully at 22:45 and 22:46 CDT on September 14. On September 15, Apple approval tickets were successfully retrieved, stapled, and validated for both exact submitted apps. Gatekeeper accepts both with `source=Notarized Developer ID`. The final DMGs and ZIPs package these approved apps without rebuilding or re-signing them.
 - Google Drive added disallowed Finder metadata during a local in-place build. Final candidate bundles were built outside the synced directory, and only installer archives are copied back.
 - The first GitHub workflow passed Windows builds and packaged tests; its Mac packaging failed because missing signing secrets became empty certificate paths. After the workflow removed empty values and explicitly selected preview or distribution signing, [both native platform jobs passed](https://github.com/ausmeyer/academic_publication_tracker/actions/runs/34890499980), including packaged desktop and Scholar checks.
 
@@ -44,7 +45,7 @@ DataCite topic searches with publication-year limits and creator-name searches r
 
 The stale screen reported during this update came from a v0.1.0 process that remained running while its development release bundle was replaced. Its single-instance lock refocused that existing process when another copy opened. Normal quit followed by opening the newly installed build resolves the version mismatch; the application name and workspace location are unchanged.
 
-## Installer checks
+## Earlier v0.4.2 installer checks
 
 - Final Apple Silicon app launch and Scholar checks passed on the host Mac. Version 0.4.2 replaced the earlier app in the user Applications folder after a normal quit. The previous application bundle was retained as a backup, and the new bundle contents matched the packaged build. The workspace checksum was unchanged at installation. The running installed app visibly showed v0.4.2 and the two existing search snapshots. The isolated desktop screenshots verify the neutral Author default, eight sources, and the welcome heading on one line in a wide window.
 - Final Intel app launch passed under the host's existing Rosetta installation; physical Intel hardware was not used.
@@ -55,9 +56,13 @@ The stale screen reported during this update came from a v0.1.0 process that rem
 
 ## Distribution limits
 
-The project includes self-contained Mac Apple Silicon, Mac Intel, and Windows x64 packaging, plus native GitHub build and launch checks. The v0.4.3 Mac candidates have valid Developer ID signatures; notarization and final downloaded-installer verification remain pending. Windows remains an explicitly unsigned preview. These statuses must be stated accurately on the download page.
+The project includes self-contained Mac Apple Silicon, Mac Intel, and Windows x64 packaging, plus native GitHub build and launch checks. The v0.4.3 Mac apps have valid Developer ID signatures and stapled Apple notarization tickets. Both final DMGs and ZIPs pass integrity and extracted-app verification; both quarantined DMG copies pass Gatekeeper and launch checks. Apple Silicon was tested natively and Intel under Rosetta; a separate clean Mac and physical Intel hardware were not used. Windows remains an explicitly unsigned preview. These statuses must be stated accurately on the download page.
 
-The native Windows workflow now passes build, application, and packaged-application checks. These checks launch the packaged executable directly; they do not exercise the NSIS installer wizard on a clean Windows computer. That clean-machine installation check remains unverified.
+The [final native workflow](https://github.com/ausmeyer/academic_publication_tracker/actions/runs/34928101947) passes on macOS and Windows. On Windows, it installs the exact generated NSIS installer silently into a temporary directory on the fresh runner and then launches the installed app with an isolated test profile. The installation and desktop checks pass. This verifies automated installation and launch, not manual wizard interaction or SmartScreen behavior on a consumer PC. The published Windows installer remains unsigned.
+
+## Release provenance
+
+The final Mac apps contain application code from `a336df362d0691daee5791f43d622a6d71bac3e1`. The Windows installer is the exact artifact from successful native workflow run `34928101947` at `dcf1a1b8af096134b8db2b504ca8d0f8893a808f`; the intervening changes only affect CI and documentation. The release source archive includes the final documentation updates. `SHA256SUMS-0.4.3.txt` accompanies the release downloads.
 
 ## Repeat the checks
 

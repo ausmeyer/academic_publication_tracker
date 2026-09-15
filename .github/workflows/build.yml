@@ -70,6 +70,18 @@ jobs:
           path: release/*.png
       - name: Verify packaged Scholar browser
         run: node scripts/smoke-scholar.mjs --packaged
+      - name: Verify Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem 'release/*-win-x64.exe')
+          if ($installers.Count -ne 1) { throw 'Expected one Windows installer.' }
+          $location = Join-Path $env:RUNNER_TEMP 'apt-installed'
+          $installation = Start-Process -FilePath $installers[0].FullName -ArgumentList '/S', "/D=$location" -Wait -PassThru
+          if ($installation.ExitCode -ne 0) { throw "Installer failed: $($installation.ExitCode)" }
+          node scripts/smoke-electron.mjs "$location/Academic Publication Tracker.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Windows app failed its smoke check.' }
       - uses: actions/upload-artifact@v4
         with:
           name: Academic-Publication-Tracker-${{ matrix.platform }}

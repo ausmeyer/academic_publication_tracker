@@ -1,6 +1,6 @@
 # Research Insights
 
-These features are included in the v0.5.0 release candidate; the published v0.4.3 installers do not contain them. To run the source tree locally, from the repository directory run:
+These features are included in v0.5.0. To run the source tree locally, from the repository directory run:
 
 ```sh
 npm run desktop

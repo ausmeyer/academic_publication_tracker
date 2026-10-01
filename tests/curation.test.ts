@@ -102,12 +102,17 @@ describe('refresh curation', () => {
     );
   });
 
-  it('leaves duplicate old identity and title candidates ambiguous rather than picking the last', () => {
+  it('combines duplicate old identity candidates and leaves title candidates of different papers ambiguous', () => {
     const fresh = work({ doi: '10.1234/a' });
     const old = reviewed({ doi: '10.1234/a' });
     expect(
       carryForwardCuration([fresh], [old, { ...old, id: 'other', notes: 'Different decision' }])[0],
-    ).toEqual(fresh);
+    ).toEqual({
+      ...fresh,
+      included: false,
+      notes: 'Read carefully\n\nDifferent decision',
+      tags: ['methods'],
+    });
     const withoutDoi = work();
     expect(
       carryForwardCuration(

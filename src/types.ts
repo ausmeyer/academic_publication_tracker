@@ -42,6 +42,8 @@ export interface Work {
   id: string;
   title: string;
   authors: string[];
+  authorsComplete?: boolean;
+  citationHistory?: Array<Omit<AnnualCitation, 'key'>>;
   year: number | null;
   venue: string;
   doi: string;
@@ -84,10 +86,48 @@ export interface Snapshot {
   searchedAt: string;
   sourceResults: Omit<SourceResult, 'works'>[];
   isDemo?: boolean;
+  insights?: InsightsSettings;
   previous?: { searchedAt: string; papers: number; citations: number };
 }
+export interface PaperAnnotation {
+  key: string;
+  authors: string[];
+  complete: boolean;
+  role?: 'sole' | 'first' | 'second' | 'middle' | 'last' | 'corresponding';
+}
+export interface AnnualCitation {
+  key: string;
+  year: number;
+  citations: number;
+  source: SourceId;
+}
+export interface JournalRank {
+  venue: string;
+  year: number;
+  category: string;
+  quartile: 'Q1' | 'Q2' | 'Q3' | 'Q4';
+  source: string;
+}
+export interface RetractionRecord {
+  doi: string;
+  status: string;
+  reason: string;
+  date: string;
+  source: string;
+}
+export interface InsightsSettings {
+  author: string;
+  aliases: string[];
+  yearFrom?: number;
+  yearTo?: number;
+  lensConvention: boolean;
+  annotations: PaperAnnotation[];
+  annualCitations: AnnualCitation[];
+  journalRanks: JournalRank[];
+  retractions: RetractionRecord[];
+}
 export interface Workspace {
-  version: 1;
+  version: 2;
   snapshots: Snapshot[];
   activeId: string | null;
 }
@@ -104,6 +144,17 @@ export interface DesktopBridge {
   importFile(): Promise<{ name: string; content: string } | null>;
   openExternal(url: string): Promise<void>;
   copyText(text: string): Promise<void>;
+  /** Desktop only: called before the app quits so the renderer can save edits still pending. */
+  onFlushRequest?(listener: () => void | Promise<void>): () => void;
+  /** Desktop only: explains that the workspace was restored from its automatic backup, if it was. */
+  recoveryNotice?(): Promise<string | null>;
+  /**
+   * Desktop only: tells the shell about work that exists only in memory (search results that could
+   * not be saved, edits that failed to save), or `null` once it is saved or discarded. The shell asks
+   * before it closes the window or quits while this is set. The interface must call it before it
+   * acknowledges a flush request if a save failed.
+   */
+  setUnsavedWork?(description: string | null): void;
 }
 declare global {
   interface Window {

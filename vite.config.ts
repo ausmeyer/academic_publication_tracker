@@ -2,6 +2,7 @@ import { type Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { searchSources } from './src/services/sources.ts';
+import { readBody } from './src/services/body.ts';
 function localSearch(): Plugin {
   return {
     name: 'local-scholarly-search',
@@ -15,12 +16,7 @@ function localSearch(): Plugin {
           return;
         }
         try {
-          let body = '';
-          for await (const chunk of request) {
-            body += chunk;
-            if (body.length > 32000) throw new Error('Search request is too large.');
-          }
-          const { query, settings } = JSON.parse(body);
+          const { query, settings } = JSON.parse(await readBody(request, 32000));
           response.end(JSON.stringify(await searchSources(query, settings)));
         } catch (error) {
           response.statusCode = 400;
@@ -40,14 +36,15 @@ export default defineConfig({
     {
       name: 'production-csp',
       apply: 'build',
-      transformIndexHtml: (html) =>
-        html.replace(
-          "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*",
-          "connect-src 'self'",
-        ),
+      transformIndexHtml: (html) => {
+        const development = "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*";
+        if (!html.includes(development))
+          throw new Error('The production content-security policy could not be tightened.');
+        return html.replace(development, "connect-src 'self'");
+      },
     },
   ],
-  server: { host: '127.0.0.1', port: 5173, strictPort: true },
+  server: { host: '127.0.0.1', port: Number(process.env.APT_DEV_PORT) || 5173, strictPort: true },
   build: { outDir: 'dist' },
   test: { include: ['tests/**/*.test.ts'], exclude: ['tests/**/*.e2e.test.ts'] },
 });

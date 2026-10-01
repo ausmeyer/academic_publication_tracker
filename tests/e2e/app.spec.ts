@@ -49,16 +49,18 @@ const snapshot: Snapshot = {
   searchedAt: at,
   sourceResults: [{ source: 'europepmc', total: 3 }],
 };
-const workspace: Workspace = { version: 1, snapshots: [snapshot], activeId: snapshot.id };
+const workspace: Workspace = { version: 2, snapshots: [snapshot], activeId: snapshot.id };
 async function seed(page: Page, data: Workspace = workspace) {
   await page.addInitScript(
     (data) => localStorage.setItem('apt-workspace-v1', JSON.stringify(data)),
     data,
   );
 }
-async function importJson(page: Page, content: string, name = 'backup.json') {
+async function importJson(page: Page, content: string, name = 'backup.json', nearlyFull = false) {
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Import', exact: true }).click();
+  // A workspace above 90% of a limit asks before adding more.
+  if (nearlyFull) await page.getByRole('button', { name: 'Continue anyway', exact: true }).click();
   await (
     await chooser
   ).setFiles({ name, mimeType: 'application/json', buffer: Buffer.from(content) });
@@ -130,6 +132,15 @@ test('screening, filtering, sorting, notes and tags persist', async ({ page }) =
 test('refresh preserves earlier snapshot and curation', async ({ page }) => {
   const data = structuredClone(workspace);
   data.snapshots[0].works[0].notes = 'Previously screened';
+  data.snapshots[0].insights = {
+    author: 'Jane Scholar',
+    aliases: [],
+    lensConvention: false,
+    annotations: [],
+    annualCitations: [{ key: '10.1234/one', year: 2025, citations: 4, source: 'scholar' }],
+    journalRanks: [],
+    retractions: [],
+  };
   data.snapshots[0].works[0].included = false;
   await seed(page, data);
   await page.route('**/api/search', (route) =>
@@ -158,6 +169,8 @@ test('refresh preserves earlier snapshot and curation', async ({ page }) => {
   expect(stored.snapshots).toHaveLength(2);
   expect(stored.snapshots[0].works[0].notes).toBe('Previously screened');
   expect(stored.snapshots[1].works[0].citations).toBe(42);
+  expect(stored.snapshots[0].insights).toEqual(data.snapshots[0].insights);
+  expect(stored.snapshots[1].insights).toEqual(data.snapshots[0].insights);
 });
 
 test('export included publications then import JSON and backup', async ({ page }) => {
@@ -212,14 +225,14 @@ test('invalid import reports an error without losing the workspace', async ({ pa
 
 test('oversized combined restore fails safely rather than crashing', async ({ page }) => {
   const data: Workspace = {
-    version: 1,
+    version: 2,
     activeId: 's0',
     snapshots: Array.from({ length: 500 }, (_, i) => ({ ...snapshot, works: [], id: `s${i}` })),
   };
   await seed(page, data);
   await page.goto('/');
-  await importJson(page, JSON.stringify(workspace));
-  await expect(page.getByRole('alert')).toContainText('oversized workspace list');
+  await importJson(page, JSON.stringify(workspace), 'backup.json', true);
+  await expect(page.getByRole('alert')).toContainText('maximum of 500 saved searches');
   await expect(page.getByRole('button', { name: /New search/ })).toBeVisible();
   expect(
     await page.evaluate(
@@ -241,6 +254,36 @@ test('backup import recovers corrupt local storage and saves restored data', asy
     .toBe(1);
 });
 
+test('insights switch between publication and citation timelines without open-access tracking', async ({
+  page,
+}) => {
+  const data = structuredClone(workspace);
+  data.snapshots[0].query = {
+    text: 'Jane Scholar',
+    mode: 'author',
+    sources: ['europepmc'],
+    limit: 25,
+  };
+  await seed(page, data);
+  await page.goto('/');
+  await expect(page.getByRole('columnheader', { name: 'Access', exact: true })).toHaveCount(0);
+  await expect(page.locator('option[value="oa"]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Research insights', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Publication timeline', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('Open access', { exact: true })).toHaveCount(0);
+  await page.getByLabel('Timeline measure').selectOption('citations');
+  await expect(page.getByRole('heading', { name: 'Citation timeline', exact: true })).toBeVisible();
+  await expect(
+    page.locator('.chart-title span').filter({ hasText: 'Lifetime citations by publication year' }),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Authorship roles', exact: true })).toBeVisible();
+  await expect(
+    page.getByText(/This panel never opens or requests Google Scholar pages/),
+  ).toBeVisible();
+});
+
 test('navigation, search shortcut and narrow layout remain usable', async ({ page }) => {
   await seed(page);
   await page.goto('/');
@@ -260,6 +303,137 @@ test('navigation, search shortcut and narrow layout remain usable', async ({ pag
   await page.getByRole('button', { name: works[0].title, exact: true }).click();
   await expect(page.getByRole('complementary', { name: 'Publication details' })).toBeVisible();
   await page.screenshot({ path: 'test-results/narrow-workspace.png', fullPage: true });
+});
+
+test('local insights analyze imported sets, import reference data, export and persist without network searches', async ({
+  page,
+}) => {
+  await page.addInitScript((data) => {
+    if (!sessionStorage.getItem('insights-seeded')) {
+      localStorage.setItem('apt-workspace-v1', JSON.stringify(data));
+      sessionStorage.setItem('insights-seeded', 'true');
+    }
+  }, workspace);
+  const requests: string[] = [];
+  page.on('request', (request) => {
+    if (/scholar\.google|\/api\/search/.test(request.url())) requests.push(request.url());
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Research insights', exact: true }).click();
+  await page.getByLabel('Author to analyze', { exact: true }).fill('Jane Scholar');
+  await page.getByRole('button', { name: 'Apply analysis', exact: true }).click();
+  await expect(
+    page.getByText('3 of 3 included publications classified.', { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Citation distributions by role', exact: true }),
+  ).toBeVisible();
+  await page.getByText('Import local analysis data', { exact: true }).click();
+  const imports = [
+    ['authors', 'key,authors,complete,role\none,Jane Scholar; Alex Researcher,true,corresponding'],
+    ['annual', 'key,year,citations,source\none,2025,9,scholar\ntwo,2025,0,scholar'],
+    [
+      'rankings',
+      'venue,year,category,quartile,source\nJournal of Research Methods,2021,Medicine,Q1,Test ranks',
+    ],
+  ];
+  for (const [kind, content] of imports) {
+    await page.getByLabel('Analysis data type').selectOption(kind);
+    const chooser = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: 'Import analysis data', exact: true }).click();
+    await (
+      await chooser
+    ).setFiles({ name: `${kind}.csv`, mimeType: 'text/csv', buffer: Buffer.from(content) });
+    await expect(page.getByRole('status').filter({ hasText: 'Imported' })).toBeVisible();
+  }
+  await expect(
+    page.getByRole('heading', { name: 'Retractions and other notices', exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByText('Retraction matches', { exact: true })).toHaveCount(0);
+  await expect(page.locator('option[value="retractions"]')).toHaveCount(0);
+  await page.getByLabel('Timeline measure').selectOption('annual');
+  await expect(
+    page.getByRole('img', { name: /Citations received per calendar year: 2025: 9/ }),
+  ).toBeVisible();
+  await page.getByLabel('Citation source', { exact: true }).selectOption('scholar');
+  await expect(
+    page.getByRole('img', { name: /Citations received per calendar year: 2025: 9/ }),
+  ).toBeVisible();
+  await page.getByLabel('Citation source', { exact: true }).selectOption('all');
+  await page.getByLabel('Role chart measure').selectOption('citations');
+  await expect(page.locator('[title="Corresponding author, Q1: 42 citations"]')).toBeVisible();
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export JSON', exact: true }).click();
+  expect((await download).suggestedFilename()).toBe('research-insights.json');
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem('apt-workspace-v1')!).snapshots[0].insights?.journalRanks
+            .length,
+      ),
+    )
+    .toBe(1);
+  await page.reload();
+  await page.getByRole('button', { name: 'Research insights', exact: true }).click();
+  await expect(page.getByLabel('Author to analyze', { exact: true })).toHaveValue('Jane Scholar');
+  await expect(
+    page.getByText('1 of 3 papers have a unique matching quartile.', { exact: false }),
+  ).toBeVisible();
+  await page.getByLabel('Publication year from').fill('2023');
+  await page.getByRole('button', { name: 'Apply analysis', exact: true }).click();
+  await expect(page.locator('.metric-value').first()).toHaveText('2');
+  await expect(
+    page.getByText('0 of 2 papers have a unique matching quartile.', { exact: false }),
+  ).toBeVisible();
+  expect(requests).toEqual([]);
+  await page.screenshot({ path: 'test-results/local-insights-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 650, height: 1000 });
+  await expect(page.getByLabel('Author to analyze', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ path: 'test-results/local-insights-narrow.png', fullPage: true });
+});
+
+test('incomplete Scholar author lists require local review and bad imports leave saved analysis intact', async ({
+  page,
+}) => {
+  const data = structuredClone(workspace);
+  data.snapshots[0].works[0].authorsComplete = false;
+  data.snapshots[0].works[0].authors = ['Alex Researcher', 'Another Person', 'Jane Scholar'];
+  await seed(page, data);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Research insights', exact: true }).click();
+  await page.getByLabel('Author to analyze', { exact: true }).fill('Jane Scholar');
+  await page.getByRole('button', { name: 'Apply analysis', exact: true }).click();
+  await expect(
+    page.getByText('2 of 3 included publications classified.', { exact: false }),
+  ).toBeVisible();
+  await page.getByText('Review author lists and roles', { exact: true }).click();
+  await page.getByLabel('I confirm this is the complete author list in publication order').check();
+  await page.getByLabel('Confirmed role override').selectOption('corresponding');
+  await page.getByRole('button', { name: 'Save author review', exact: true }).click();
+  await expect(
+    page.getByText('3 of 3 included publications classified.', { exact: false }),
+  ).toBeVisible();
+  await page.getByText('Import local analysis data', { exact: true }).click();
+  await page.getByLabel('Analysis data type').selectOption('annual');
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Import analysis data', exact: true }).click();
+  await (
+    await chooser
+  ).setFiles({
+    name: 'bad.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('key,year,citations,source\none,2025,-1,scholar'),
+  });
+  await expect(page.getByRole('alert')).toContainText(
+    'Row 2, citations: "-1" is not a whole number of citations.',
+  );
+  await expect(
+    page.getByText('3 of 3 included publications classified.', { exact: false }),
+  ).toBeVisible();
 });
 
 test('retains partial pages when the only selected source later fails', async ({ page }) => {
@@ -316,7 +490,8 @@ test('new searches default to an empty author search with a neutral placeholder'
   await page.getByRole('button', { name: 'Topic or title', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search terms' }).fill('temporary topic');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.keyboard.press('ControlOrMeta+k');
+  // The test browser reports Windows, where the shortcut is Ctrl+K (Cmd+K only on macOS).
+  await page.keyboard.press('Control+k');
   await expect(author).toHaveValue('');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.getByRole('button', { name: /Explore a research topic/ }).click();
@@ -418,26 +593,143 @@ test('combined preprints and DataCite preserve the query and actual record provi
   expect(submitted?.sources).toEqual(['preprints', 'datacite']);
 });
 
-test('web preview explains Scholar desktop search and keeps source selection exclusive', async ({
+test('web preview allows Scholar and API sources together and explains collection limits', async ({
   page,
 }) => {
   await page.goto('/');
   await page.getByRole('button', { name: /New search/ }).click();
   await page.getByRole('checkbox', { name: /Google Scholar/ }).check();
   await expect(page.getByRole('checkbox', { name: /Google Scholar/ })).toBeChecked();
-  await expect(page.getByRole('checkbox', { name: /OpenAlex/ })).not.toBeChecked();
-  await expect(page.getByRole('checkbox', { name: /Crossref/ })).not.toBeChecked();
+  await expect(page.getByRole('checkbox', { name: /OpenAlex/ })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: /Crossref/ })).toBeChecked();
   await expect(
-    page.getByRole('button', { name: 'Open Google Scholar', exact: true }),
+    page.getByRole('button', { name: 'Search sources and open Scholar', exact: true }),
   ).toBeVisible();
   await expect(
     page.getByText(/The installed desktop app collects Scholar results internally/),
   ).toBeVisible();
-  await page.getByRole('checkbox', { name: /Europe PMC/ }).check();
-  await expect(page.getByRole('checkbox', { name: /Google Scholar/ })).not.toBeChecked();
+  await page.getByRole('checkbox', { name: /PubMed/ }).check();
+  await expect(page.getByRole('checkbox', { name: /Google Scholar/ })).toBeChecked();
+  for (const name of [/OpenAlex/, /Crossref/, /Europe PMC/, /PubMed/])
+    await page.getByRole('checkbox', { name }).uncheck();
   await expect(
-    page.getByRole('button', { name: 'Search publications', exact: true }),
+    page.getByRole('button', { name: 'Open Google Scholar', exact: true }),
   ).toBeVisible();
+});
+
+test('Scholar and PubMed produce one saved paper with complete authors and Scholar citations', async ({
+  page,
+}) => {
+  const pubmed: Work = {
+    ...works[0],
+    id: 'pubmed:one',
+    authors: ['Alex Researcher', 'Second Person', 'Jane Scholar', 'Last Person'],
+    citations: null,
+    provenance: [
+      {
+        source: 'pubmed',
+        sourceId: 'one',
+        citations: null,
+        retrievedAt: at,
+        url: 'https://pubmed.ncbi.nlm.nih.gov/1/',
+      },
+    ],
+  };
+  const scholar: Work = {
+    ...works[0],
+    id: 'scholar:one',
+    authors: ['A Researcher', 'S Person'],
+    authorsComplete: false,
+    citations: 55,
+    abstract: '',
+    provenance: [
+      {
+        source: 'scholar',
+        sourceId: 'one',
+        citations: 55,
+        retrievedAt: at,
+        url: 'https://scholar.google.com/scholar?q=test',
+      },
+    ],
+  };
+  await page.addInitScript(
+    ({ pubmed, scholar, at }) => {
+      window.desktop = {
+        async search(query) {
+          if (query.sources.length !== 1 || query.sources[0] !== 'pubmed')
+            throw new Error('Expected a PubMed-only API request');
+          localStorage.setItem('api-finished', 'true');
+          return { searchedAt: at, results: [{ source: 'pubmed', works: [pubmed], total: 1 }] };
+        },
+        async searchScholar(query) {
+          if (
+            !localStorage.getItem('api-finished') ||
+            query.sources.length !== 1 ||
+            query.sources[0] !== 'scholar'
+          )
+            throw new Error('Provider searches were not sequenced correctly');
+          return { searchedAt: at, results: [{ source: 'scholar', works: [scholar], total: 1 }] };
+        },
+        onScholarProgress: () => () => {},
+        async controlScholar() {},
+        async loadWorkspace() {
+          return JSON.parse(localStorage.getItem('apt-workspace-v1') || 'null');
+        },
+        async saveWorkspace(data) {
+          localStorage.setItem('apt-workspace-v1', JSON.stringify(data));
+        },
+        async loadSettings() {
+          return { email: '', openalexApiKey: '', semanticApiKey: '', ncbiApiKey: '' };
+        },
+        async saveSettings() {},
+        async exportFile() {
+          return false;
+        },
+        async importFile() {
+          return null;
+        },
+        async openExternal() {},
+        async copyText() {},
+      };
+    },
+    { pubmed, scholar, at },
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: /New search/ }).click();
+  await page.getByLabel('Author name', { exact: true }).fill('Jane Scholar');
+  for (const name of [/OpenAlex/, /Crossref/, /Europe PMC/])
+    await page.getByRole('checkbox', { name }).uncheck();
+  await page.getByRole('checkbox', { name: /Google Scholar/ }).check();
+  await page.getByRole('checkbox', { name: /PubMed/ }).check();
+  await expect(page.getByRole('checkbox', { name: /Google Scholar/ })).toBeChecked();
+  await page.getByRole('button', { name: 'Search publications', exact: true }).click();
+  await expect(page.locator('.publication-table tbody tr')).toHaveCount(1);
+  await expect(page.locator('.metric-value').nth(1)).toHaveText('55');
+  await page.getByRole('button', { name: 'Research insights', exact: true }).click();
+  await expect(
+    page.getByText('1 of 1 included publications classified.', { exact: false }),
+  ).toBeVisible();
+  await expect(page.locator('.authorship-chart')).toContainText('Middle author');
+  await page.getByLabel('Citation source', { exact: true }).selectOption('scholar');
+  await expect(page.locator('.metric-value').nth(1)).toHaveText('55');
+  await page.getByLabel('Citation source', { exact: true }).selectOption('pubmed');
+  await expect(page.locator('.metric-caption').nth(1)).toContainText('0 of 1');
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () => JSON.parse(localStorage.getItem('apt-workspace-v1')!).snapshots[0].works[0].authors,
+      ),
+    )
+    .toEqual(pubmed.authors);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('apt-workspace-v1')!));
+  expect(saved.snapshots[0].query.sources).toEqual(['scholar', 'pubmed']);
+  expect(saved.snapshots[0].works[0].authorsComplete).toBe(true);
+  expect(saved.snapshots[0].works[0].provenance).toHaveLength(2);
+  await page.reload();
+  await expect(page.locator('.publication-table tbody tr')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(page.getByText(/Earlier snapshot retained in your library/)).toBeVisible();
+  await expect(page.locator('.publication-table tbody tr')).toHaveCount(1);
 });
 
 test('Scholar collection saves citation metrics and captured-page provenance across restart', async ({
@@ -507,6 +799,8 @@ test('Scholar collection saves citation metrics and captured-page provenance acr
   await page.getByRole('button', { name: /New search/ }).click();
   await page.getByRole('button', { name: 'Topic or title', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search terms' }).fill('research');
+  for (const name of [/OpenAlex/, /Crossref/, /Europe PMC/])
+    await page.getByRole('checkbox', { name }).uncheck();
   await page.getByRole('checkbox', { name: /Google Scholar/ }).check();
   await page.getByRole('button', { name: 'Search publications', exact: true }).click();
   await expect(page.locator('.publication-table tbody tr')).toHaveCount(1);
@@ -535,6 +829,8 @@ test('Scholar collection saves citation metrics and captured-page provenance acr
   await page.getByRole('button', { name: /New search/ }).click();
   await page.getByRole('button', { name: 'Topic or title', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search terms' }).fill('canceled search');
+  for (const name of [/OpenAlex/, /Crossref/, /Europe PMC/])
+    await page.getByRole('checkbox', { name }).uncheck();
   await page.getByRole('checkbox', { name: /Google Scholar/ }).check();
   await page.getByRole('button', { name: 'Search publications', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'research', exact: true })).toBeVisible();
@@ -630,6 +926,8 @@ for (const outcome of ['stop', 'cancel'] as const) {
     await page.getByRole('button', { name: /New search/ }).click();
     await page.getByRole('button', { name: 'Topic or title', exact: true }).click();
     await page.getByRole('textbox', { name: 'Search terms' }).fill('Internal search');
+    for (const name of [/OpenAlex/, /Crossref/, /Europe PMC/])
+      await page.getByRole('checkbox', { name }).uncheck();
     await page.getByRole('checkbox', { name: /Google Scholar/ }).check();
     await expect(page.getByText('Search directly in the app.')).toBeVisible();
     await page.getByRole('button', { name: 'Search publications', exact: true }).click();

@@ -100,7 +100,7 @@ describe('bibliometric calculations', () => {
     });
   });
 
-  it('groups lifetime citations by publication year, and counts open works and venues', () => {
+  it('groups lifetime citations by publication year and counts venues', () => {
     const metrics = calculateMetrics([
       work({ year: 2022, citations: 4, isOpenAccess: true }),
       work({ year: 2020, citations: 8 }),
@@ -108,11 +108,10 @@ describe('bibliometric calculations', () => {
       work({ year: null, venue: '' }),
     ]);
     expect(metrics.years).toEqual([
-      { year: 2020, papers: 1, citations: 8 },
-      { year: 2022, papers: 2, citations: 4 },
+      { year: 2020, papers: 1, citations: 8, coverage: 1 },
+      { year: 2022, papers: 2, citations: 4, coverage: 1 },
     ]);
     expect(metrics.topVenues).toEqual([{ name: 'Journal of Research', count: 3 }]);
-    expect(metrics.openAccess).toBe(1);
   });
 
   it('has defined empty, all-missing, and future-year behavior', () => {
@@ -136,13 +135,57 @@ describe('bibliometric calculations', () => {
 });
 
 describe('conservative publication merging', () => {
+  it('combines Scholar counts with complete PubMed authors in either retrieval order', () => {
+    const scholar = work({
+      id: 'scholar:one',
+      authors: ['A Researcher', 'B Researcher'],
+      authorsComplete: false,
+      citations: 42,
+      provenance: [
+        { source: 'scholar', sourceId: 'one', citations: 42, retrievedAt: '2026-09-16', url: '' },
+      ],
+    });
+    const pubmed = work({
+      id: 'pubmed:one',
+      authors: ['Alex Researcher', 'Blake Researcher', 'Austin Meyer', 'Last Author'],
+      citations: null,
+      provenance: [
+        { source: 'pubmed', sourceId: 'one', citations: null, retrievedAt: '2026-09-16', url: '' },
+      ],
+    });
+    for (const records of [
+      [scholar, pubmed],
+      [pubmed, scholar],
+    ]) {
+      const merged = mergeWorks(records);
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({
+        authors: pubmed.authors,
+        authorsComplete: true,
+        citations: 42,
+      });
+      expect(citationsForSource(merged[0], 'scholar')).toBe(42);
+      expect(citationsForSource(merged[0], 'pubmed')).toBeNull();
+      expect(merged[0].provenance).toHaveLength(2);
+    }
+    // A longer but explicitly incomplete list must not replace verified complete metadata.
+    expect(
+      mergeWorks([
+        { ...pubmed, authors: ['Alex Researcher', 'Austin Meyer'] },
+        { ...scholar, authors: ['A Researcher', 'A Meyer', 'B Researcher'] },
+      ])[0],
+    ).toMatchObject({
+      authors: ['Alex Researcher', 'Austin Meyer'],
+      authorsComplete: true,
+    });
+  });
   it('normalizes DOI URLs and encoded DOI text', () => {
     expect(normalizeDoi(' https://DX.DOI.ORG/10.1234/ABC%28DEF%29 ')).toBe('10.1234/abc(def)');
     expect(normalizeDoi('doi:10.1234/ABC')).toBe('10.1234/abc');
     expect(normalizeDoi('javascript:bad')).toBe('');
   });
 
-  it('merges identical DOIs, retains provenance, and preserves first curation', () => {
+  it('merges identical DOIs, retains provenance, and combines curation', () => {
     const first = work({
       citations: 5,
       included: false,
@@ -175,8 +218,8 @@ describe('conservative publication merging', () => {
       id: first.id,
       citations: 8,
       included: false,
-      tags: ['keep'],
-      notes: 'my note',
+      tags: ['keep', 'other'],
+      notes: 'my note\n\nother note',
     });
     expect(merged[0].provenance).toHaveLength(2);
     expect(first.citations).toBe(5);
@@ -526,7 +569,15 @@ describe('publication import and export', () => {
       openAccessUrl: '',
       included: false,
       authors: ['Valid'],
-      provenance: [{ source: 'pubmed', sourceId: '', citations: null, url: '', retrievedAt: '' }],
+      provenance: [
+        {
+          source: 'pubmed',
+          sourceId: '',
+          citations: null,
+          url: '',
+          retrievedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        },
+      ],
     });
   });
 
@@ -537,7 +588,7 @@ describe('publication import and export', () => {
 
   it('rejects broken and unsupported input with useful errors', () => {
     expect(() => importWorks('', 'empty.csv')).toThrow('empty');
-    expect(() => importWorks('{}', 'backup.json')).toThrow('Restore backup');
+    expect(() => importWorks('{}', 'backup.json')).toThrow('use Import');
     expect(() => importWorks('[null]', 'works.json')).toThrow('publication object');
     expect(() => importWorks('[{}]', 'works.json')).toThrow('title');
     expect(() => importWorks('Title,Year\n"open quote,2020', 'works.csv')).toThrow('not closed');

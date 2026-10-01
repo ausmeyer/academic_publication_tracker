@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- V8 compiles JavaScript at run time (hardened runtime needs both). -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!--
+      Library validation stays ON: Electron Framework and every helper are signed with the same
+      identity, so nothing signed by anyone else can be loaded into the app. electron-builder's
+      default file also adds com.apple.security.cs.disable-library-validation; this app does not.
+    -->
+  </dict>
+</plist>

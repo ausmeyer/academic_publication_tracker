@@ -17,6 +17,10 @@ node scripts/smoke-electron.mjs
 node scripts/smoke-scholar.mjs
 ```
 
+`npm run build` also writes the notices of the bundled libraries to `dist-electron/THIRD_PARTY_LICENSES.txt`, and the packaged app carries them as `THIRD_PARTY_LICENSES.txt` in its resources folder. Only `electron` is a runtime dependency of the package: the interface and the main process are bundled, so `react`, `lucide-react` and `fast-xml-parser` are development dependencies and `app.asar` holds about a dozen files. A test fails when the application imports a library the notices leave out. Windows packages also carry Electron's own `LICENSE` and `LICENSES.chromium.html`; the macOS packages currently do not.
+
+An unpackaged development run (`npm run desktop`) uses your real workspace folder. Set `APT_USER_DATA_DIR=/absolute/path` to use another folder instead; the override is ignored in packaged apps.
+
 On macOS:
 
 ```sh
@@ -57,9 +61,17 @@ For Windows, supply the code-signing certificate through `WIN_CSC_LINK` and `WIN
 
 The workflow reads these values from repository secrets. Pull requests from forks cannot access signing secrets. Without a Mac certificate, the workflow explicitly selects the ad-hoc preview configuration. Empty secret values are unset before invoking the builder. Release notes must state the signing status.
 
+## Hardening of the packaged app
+
+`electron-builder.yml` flips Electron fuses in the packaged binary, where they cannot be changed afterwards: `ELECTRON_RUN_AS_NODE` and `NODE_OPTIONS` are ignored (no other local process can run code as the signed app), cookie encryption is on, and the app loads only from its integrity-checked `app.asar`. Two fuses stay on deliberately: `enableNodeCliInspectArguments`, because Playwright's Electron driver attaches through `--inspect` and the packaged-app smoke checks would time out without it, and `grantFileProtocolExtraPrivileges`, because the window loads from `file://` (turning it off first needs a custom protocol). `node scripts/smoke-electron.mjs --packaged` reads the fuses and the macOS entitlements from the packaged app and checks that `ELECTRON_RUN_AS_NODE` is ignored.
+
+macOS builds use `build/entitlements.mac.plist`: just-in-time compilation and unsigned executable memory, which V8 needs. Library validation stays on, so the app cannot load a library signed by anyone else; electron-builder's default entitlements turn it off, and this app does not. This has been exercised only on the ad-hoc preview build, where the hardened runtime is off. **Launch a Developer ID–signed, notarized build on a clean Mac before publishing.** If it fails to start with a library-validation or Team ID error, add `com.apple.security.cs.disable-library-validation` to the plist and rebuild.
+
+On Windows and Linux the spell checker is off, so Chromium does not download dictionaries from a third party. Provider requests use Electron's network stack and therefore follow the operating system's proxy and certificate settings.
+
 ## GitHub workflow
 
-The desktop build workflow runs on native macOS and Windows runners, checks types, runs unit and browser tests, verifies the native desktop shell, builds installers, and launches the packaged application before uploading artifacts. On Windows, it also silently installs the NSIS package into a temporary directory and runs the desktop smoke check against the installed executable. The desktop smoke check uses a fresh temporary profile, makes no live API requests, and tests storage and security boundaries without opening personal credentials. Pushing a version tag such as `v0.4.0` also creates a **draft** release containing both platforms' artifacts. It does not publish the draft automatically.
+The desktop build workflow runs on native macOS and Windows runners, checks types, runs unit and browser tests, verifies the native desktop shell, builds installers, and launches the packaged application before uploading artifacts. On Windows, it also silently installs the NSIS package into a temporary directory and runs the desktop smoke check against the installed executable. The desktop smoke check uses a fresh temporary profile, makes no live API requests, and tests storage and security boundaries without opening personal credentials. Pushing a version tag such as `v0.4.0` also creates a **draft** release containing both platforms' artifacts. It does not publish the draft automatically. The tag must equal the version in `package.json` and `package-lock.json`, because installer names come from the manifest; the workflow stops otherwise. If a draft for the tag already exists, the files are uploaded to it again (replacing files of the same name); the workflow refuses to touch a release that has been published. Jobs have time limits, and every third-party action is pinned to a commit SHA with its version in a comment. To update a pin, look up the new tag's commit with `git ls-remote https://github.com/<owner>/<repo> refs/tags/<tag>` (use the line ending in `^{}` for annotated tags).
 
 To inspect the native interface without owning a Windows computer, open a completed GitHub Actions run and download **Desktop-screenshots-win** from its Artifacts section. It contains the packaged app's main screen and new-search dialog captured on Windows. **Desktop-screenshots-mac** provides the corresponding Mac views. These are screenshots, not an interactive remote desktop.
 
@@ -69,7 +81,7 @@ Before tagging:
 
 1. Set the same version in `package.json` and `package-lock.json` and document the release's changes.
 2. Run all checks and ensure the platform build jobs succeed.
-3. Install and launch the exact candidate artifacts on a clean Mac and Windows computer without development tools.
+3. Install and launch the exact candidate artifacts on a clean Mac and Windows computer without development tools. On the Mac, use the signed, notarized build: its entitlements keep library validation on.
 4. Check a real search, keyless and configured-key sources, restart persistence, export/import, external links, and uninstall behavior.
 5. Verify signatures/notarization when signing is configured. Test both Mac architectures before claiming both are validated.
 6. Review the draft, state remaining limitations and signing status, and publish it manually when ready.
@@ -83,6 +95,12 @@ The application stores `workspace.json`, `workspace.json.backup`, and encrypted 
 - macOS: `~/Library/Application Support/Academic Publication Tracker/`
 - Windows: `%APPDATA%/Academic Publication Tracker/`
 
-The previous valid workspace is retained as `.backup`. If the main file is unreadable, the application loads the valid backup. Before a restore or later save replaces a corrupt primary file, the app preserves its exact original bytes in a timestamped `.corrupt` file. Keep these files when investigating data recovery. API-key encryption is bound to the operating system account; moving the settings file to another machine is not a credential migration mechanism. Use the in-app workspace backup/restore feature to move publication data, then enter credentials on the new computer.
+Workspace files are compact JSON (version 2). Each save writes a temporary file, flushes it to disk, and renames it over the old file, retrying briefly if antivirus software holds the target on Windows. A leftover `*.tmp` file older than a minute is removed at the next start. A save that would change nothing is skipped, so restarting the app does not rotate the recovery copy.
+
+`workspace.json.backup` is the exact previous file and is only replaced by a file that could be read. If the main file is unreadable, the application loads the backup and says so in a banner. Every unreadable file (the main file, an old backup, or a file written by a newer version) is kept under its original bytes as `<name>.<timestamp>-<hash>.corrupt` before anything replaces it; identical content is kept once. Keep these files when investigating data recovery.
+
+The first time a release newer than 0.4.3 replaces a version 1 workspace, it also keeps the exact old bytes as `workspace.json.v1.bak`. That copy is never overwritten. Version 0.4.3 and earlier cannot read a version 2 workspace: they treat it as unreadable and preserve it, then fall back to their own backup. To go back to 0.4.3, quit the app, keep a copy of the current `workspace.json`, and rename `workspace.json.v1.bak` to `workspace.json`; searches and edits made with the newer version are not in that file. The `.backup` file helps only right after the migration.
+
+API-key encryption is bound to the operating system account; moving the settings file to another machine is not a credential migration mechanism. Use the in-app workspace backup/restore feature to move publication data, then enter credentials on the new computer.
 
 Uninstalling preserves user data. Remove it manually only after exporting a backup if you intentionally want a full reset.

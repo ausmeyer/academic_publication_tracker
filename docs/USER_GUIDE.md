@@ -14,7 +14,7 @@ Academic Publication Tracker is an independent project inspired by the academic 
 - Collect Google Scholar results internally, with automatic paging, progress, and stop controls.
 - Keep named search snapshots with the original query, source provenance, and retrieval date. Right-click a saved search to open, rename, or delete it; deletion asks for confirmation.
 - Merge duplicate records while retaining each source's reported citation count.
-- Review publications with search, sorting, open-access filtering, inclusion/exclusion, notes, and tags.
+- Review publications with search, sorting, inclusion/exclusion, notes, and tags.
 - Explore citation metrics and publication-year charts, with explicit source and coverage limitations.
 - Refresh into a new snapshot and compare summaries while retaining the previous search.
 - Import and export CSV, BibTeX, RIS, and JSON, and back up or restore the full workspace.
@@ -69,21 +69,39 @@ The collection alternates between providers, merges duplicates, and keeps at mos
 
 Choose **New search → Google Scholar**, enter a topic, author, or DOI, and click **Search publications**. The desktop app retrieves results internally and advances through available result pages, pausing between pages. Progress shows papers collected and pages read. **Stop and keep results** saves a partial collection; **Cancel search** discards the current search without changing saved searches.
 
-If Google requires verification or sign-in, a dedicated window opens. Complete the requested step yourself and choose **Resume search**. The app does not solve or bypass challenges. Search limits, access restrictions, and changed page layouts can interrupt collection; any retrieved papers remain available with a notice. Scholar has no supported public bulk search API. See [Google Scholar search help](https://scholar.google.com/intl/en/scholar/help.html).
+You can also select PubMed, Crossref, or other API sources alongside Scholar. API sources run first, then Scholar, and matching publications are merged into one saved snapshot. Complete author lists are preferred and source-specific citation counts are retained. Stopping Scholar keeps its partial results with the API results; canceling discards the current combined search. In the browser preview, API results are saved but Scholar only opens externally.
+
+Closing the window or quitting while a search is waiting for you asks first; the results collected so far are discarded only if you choose to quit. If Google requires verification or sign-in, a dedicated window opens. Complete the requested step yourself and choose **Resume search**. A cookie-consent page, which Google shows in some regions, is handled the same way, and the search continues on its own once Scholar is shown again; this has been tested only with synthetic pages. The app does not solve or bypass challenges. Search limits, access restrictions, and changed page layouts can interrupt collection; any retrieved papers remain available with a notice. Scholar has no supported public bulk search API. See [Google Scholar search help](https://scholar.google.com/intl/en/scholar/help.html).
 
 Citation counts, retrieval dates, and actual page addresses are retained; missing counts stay unknown. Search snippets are labeled as snippets. Collections describe the pages retrieved, not a verified complete bibliography. This workflow requires the desktop app. The browser development preview opens Scholar externally; exported bibliographic files can also be added through **Import**.
 
 The collector waits for page contents and pagination links to settle. If a page keeps changing, it retains the collected records with an error. Scholar's displayed match count is treated as an estimate; a smaller retrieved collection receives an incomplete-results notice.
 
+## Saved searches, notes and limits
+
+Each search is saved as a snapshot with its date, time and publication count. Edit and Refresh repeat a search, so they are unavailable for snapshots created by importing a file. After a refresh, the note says how many included papers and citations changed.
+
+Notes save automatically a moment after you stop typing, and again when you leave the field, open another paper or quit; there is no save button. Tags are chips: press Enter or type a comma to add one, use the × on a chip to remove it, and each change is saved at once. A tag may contain commas (imported MeSH keywords such as “Influenza, Human” keep theirs). A half-typed tag becomes a chip when you leave the field or close the panel, not when you only switch to another app, and the field says when a tag is a duplicate or the 100-tag limit is reached. If the workspace refuses a note, tag or name (for example because it is full), the text stays on screen, the sidebar says “Changes not saved”, the edit is tried again when you leave the field or close the panel, and closing the app asks first. The library filter ignores capitalization and accents, and every word you type must match. Papers you exclude are dimmed.
+
+A workspace holds up to 500 saved searches, 20,000 publications in one search, 100,000 publications in all, and 25 MB. When the workspace is already more than 90% full against any of these limits, New search shows a note and Refresh and Import ask before they start. Results that do not fit are not lost: they stay on screen in a banner where you can **Retry save**, **Export these results as JSON**, **Remove older snapshots…** to make room, or **Discard results** after a confirmation. Several result sets can be held at once, each in its own banner, and a later search or import never drops them. **Remove older snapshots…** deletes nothing unless the results then fit, and otherwise says every limit that still blocks the save and how much room is missing. The held results exist only in memory: the desktop app asks before you close its window or quit while results are held or a save has failed (the browser preview asks before you leave the page), and a reload of the window loses them, so export them first if they matter.
+
+Form errors appear just above the dialog buttons, which stay in view at the smallest window size, and a notification appears at the top of the window while a dialog is open. Escape or a click outside a dialog asks before it discards text you typed; Close and Cancel do not. Cmd+K on a Mac, or Ctrl+K elsewhere, opens New search unless another dialog is open. If a search fails, the dialog reopens with your query and the reason; when another dialog is open at that moment, the reason appears in the error banner instead so nothing you typed is replaced.
+
+## Import and export
+
+Use **Import** for CSV, TSV, JSON, BibTeX and RIS files (UTF-8, UTF-16 or Windows-1252) and **Export** for CSV, BibTeX, RIS and JSON. Import reports how many publications were added, how many duplicates were merged, and which columns it did not recognize. Exports from reference managers and databases (Zotero, Scopus, Dimensions, OpenAlex, Publish or Perish, Web of Science) are read by their usual column names. Exports follow the kind of work: an article becomes `@article` or `JOUR`, a conference paper `@inproceedings` or `CONF`, and so on. The formats, limits and matching rules are in the [metric guide](METRICS.md#import-and-export).
+
 ## Updating an earlier copy
 
 Quit the running app before opening the new version. Opening another copy while the old one is running can bring the old process to the front. Use the new installer or app bundle, rather than an older mounted disk image. The app retains your existing local workspace. You can check the version in **About & metric guide**.
 
+This release saves the workspace in a newer file format (version 2). The first time it saves, it keeps your previous file next to it as `workspace.json.v1.bak`, and it never overwrites that copy. Earlier versions (0.4.3 and before) cannot open the new format, so keep that copy if you might go back; the [recovery notes](RELEASING.md#local-data-and-recovery) explain how.
+
 ## Privacy and backups
 
-The desktop app stores your workspace on your computer. API keys use operating system encryption and are never included in workspace exports. Email settings and publication notes are local plaintext. Providers receive the searches and credentials needed for their API. There is no automatic cloud synchronization.
+The desktop app stores your workspace on your computer. API keys use operating system encryption and are never included in workspace exports. Email settings and publication notes are local plaintext. Providers receive the searches and credentials needed for their API; your contact email goes to Crossref only. There is no automatic cloud synchronization.
 
-Use workspace JSON backup before moving computers or making large changes. CSV, BibTeX, and RIS are useful for exchanging bibliographic records; full workspace JSON preserves search history and application-specific annotations. See [release and recovery notes](RELEASING.md) for file locations.
+Use workspace JSON backup before moving computers or making large changes. Backups are compact JSON files named with the local date. CSV, BibTeX, and RIS are useful for exchanging bibliographic records; full workspace JSON preserves search history and application-specific annotations. A backup is not offered while the saved workspace cannot be read, because it would not contain your searches; the unreadable files are preserved. If the app itself hits an error, its error screen can export a backup of what is saved. If the app had to restore your workspace from its automatic backup, a banner says so. See [release and recovery notes](RELEASING.md) for file locations.
 
 ## Run from source
 
@@ -100,7 +118,7 @@ For browser UI development:
 npm run dev
 ```
 
-The browser preview uses local browser storage for workspaces and keeps settings in memory. Desktop mode provides the complete search and file workflow with secure credential persistence. To develop against a live renderer, run `npm run build`, start `npm run dev`, and launch Electron with `APT_RENDERER_URL=http://127.0.0.1:5173`. This override is disabled in packaged applications.
+The browser preview uses local browser storage for workspaces and keeps settings in memory. Set `APT_USER_DATA_DIR` to an absolute path to keep an unpackaged desktop run (`npm run desktop`) away from your real workspace; packaged apps ignore it. Desktop mode provides the complete search and file workflow with secure credential persistence. To develop against a live renderer, run `npm run build`, start `npm run dev`, and launch Electron with `APT_RENDERER_URL=http://127.0.0.1:5173`. This override is disabled in packaged applications.
 
 ```sh
 npm run typecheck

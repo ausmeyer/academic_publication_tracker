@@ -1,0 +1,98 @@
+/* Research insights: styles for the charts and the authorship panel. Text is at least 11px and at
+   least 4.5:1 against its background. */
+
+/* Citations received in the current calendar year are year to date: hatched, not solid. */
+.year-chart .year-bar.insight-year-to-date {
+  background: repeating-linear-gradient(135deg, #648b64 0 4px, #cbdccb 4px 8px);
+  outline: 1px dashed #648b64;
+  outline-offset: -1px;
+}
+.insight-ytd-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
+  vertical-align: -2px;
+  border: 1px solid #648b64;
+  border-radius: 2px;
+  background: repeating-linear-gradient(135deg, #648b64 0 3px, #cbdccb 3px 6px);
+}
+/* A bar value takes its column's width without adding to the chart's own width, so it can never
+   widen the page; while any value does not fit its column, Charts.tsx hides them all. */
+.year-chart .chart-value {
+  align-self: stretch;
+  contain: inline-size;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: center;
+}
+.year-chart.chart-values-hidden .chart-value {
+  visibility: hidden;
+}
+.timeline-coverage.insight-chart-note {
+  font-size: 11px;
+  color: #4f6247;
+}
+
+/* Notes, hints and confirmations inside the authorship panel. */
+.local-insights .insight-note {
+  color: #4f6247;
+  font-size: 12px;
+}
+.local-insights .insight-hint {
+  padding: 10px 12px;
+  border-left: 3px solid #709668;
+  background: #f2f6ef;
+  color: #364d32;
+  border-radius: 0 6px 6px 0;
+}
+.local-insights .insight-confirm {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid #d9a7a2;
+  border-radius: 6px;
+  background: #fdf3f2;
+  color: #7a2520;
+}
+.local-insights .insight-confirm p {
+  margin: 0 0 8px;
+}
+.local-insights .insight-confirm .insight-actions {
+  margin: 0;
+}
+.local-insights .insight-option-note {
+  margin: -4px 0 4px;
+}
+/* A white line starts each quartile segment, so neighbouring segments are told apart without
+   relying on their colours (Q4 and Unknown are close). */
+.local-insights .quartile-stack > i + i {
+  box-shadow: inset 2px 0 0 #fff;
+}
+/* The bar's split by quartile in words, on its own line under the bar (and its total). */
+.local-insights .quartile-split {
+  grid-column: 2 / -1;
+  margin-top: -8px;
+  color: #4f6247;
+  font-size: 11px;
+}
+
+@media (forced-colors: active) {
+  .year-chart .year-bar.insight-year-to-date {
+    background: Canvas;
+    border: 2px dashed CanvasText;
+    outline: none;
+  }
+  .insight-ytd-swatch {
+    background: Canvas;
+    border: 2px dashed CanvasText;
+  }
+  .local-insights .insight-hint,
+  .local-insights .insight-confirm {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+  .local-insights .quartile-stack > i + i {
+    border-left: 2px solid Canvas;
+  }
+}

@@ -1,5 +1,4 @@
-import { BrowserWindow, ipcMain, session, WebContentsView } from 'electron';
-import { randomUUID } from 'node:crypto';
+import { BrowserWindow, ipcMain, session, WebContentsView, type Session } from 'electron';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
@@ -15,6 +14,8 @@ import {
   normalizeScholarPage,
   SCHOLAR_SETTLED_CAPTURE_SCRIPT,
 } from '../src/core/scholar';
+import { allowedNavigation, isScholarSearchLocation, sameSearchPage } from './scholar-policy';
+import { configureSpellchecker } from './session-policy';
 
 const TOOLBAR_HEIGHT = 184;
 const PAGE_INTERVAL_MS = 5000;
@@ -23,40 +24,24 @@ const SEARCH_BUDGET_MS = 5 * 60 * 1000;
 const MAX_PAGES = 20;
 const COVERAGE_WARNING =
   'Google Scholar results cover only the pages retrieved in this search, not a complete bibliography. Author lists and snippets may be abbreviated. No full-text license has been verified.';
-let active: { control(action: ScholarAction): void; guardClose(): void } | null = null;
+let active: {
+  control(action: ScholarAction): void;
+  guardClose(): void;
+  waitingForUser(): boolean;
+  discard(): void;
+} | null = null;
 
-function allowedNavigation(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== 'https:' || url.username || url.password || url.port) return false;
-    if (url.hostname === 'accounts.google.com') return true;
-    if (url.hostname === 'www.google.com' && url.pathname.startsWith('/sorry/')) return true;
-    return (
-      url.hostname === 'scholar.google.com' &&
-      (['/', '/scholar', '/citations'].includes(url.pathname) || url.pathname.startsWith('/sorry/'))
-    );
-  } catch {
-    return false;
-  }
-}
-
-function sameSearchPage(value: string, initialUrl: string): boolean {
-  try {
-    const url = new URL(value),
-      initial = new URL(initialUrl);
-    return (
-      allowedNavigation(value) &&
-      url.origin === initial.origin &&
-      url.pathname === '/scholar' &&
-      ['q', 'as_ylo', 'as_yhi'].every(
-        (key) =>
-          url.searchParams.getAll(key).length === initial.searchParams.getAll(key).length &&
-          url.searchParams.get(key) === initial.searchParams.get(key),
-      )
-    );
-  } catch {
-    return false;
-  }
+// Electron cannot free a session, so one partition per search would leak a session for every search.
+// All searches share this one in-memory (never persisted) partition and wipe it before and after use.
+const SCHOLAR_PARTITION = 'apt-scholar';
+let wiping: Promise<void> = Promise.resolve();
+function wipe(target: Session): Promise<void> {
+  wiping = wiping.then(async () => {
+    await target.closeAllConnections().catch(() => undefined);
+    await target.clearData().catch(() => undefined);
+    await target.clearAuthCache().catch(() => undefined);
+  });
+  return wiping;
 }
 
 export function controlScholarSearch(action: unknown): void {
@@ -71,6 +56,17 @@ export function preventScholarSearchLoss(): boolean {
   return true;
 }
 
+/** 'waiting' means the search is only waiting for the user (verification or consent). */
+export function scholarSearchState(): 'none' | 'running' | 'waiting' {
+  if (!active) return 'none';
+  return active.waitingForUser() ? 'waiting' : 'running';
+}
+
+/** Ends the active search and discards what it collected. */
+export function discardScholarSearch(): void {
+  active?.discard();
+}
+
 /** The remote view has no preload, native bridge, persistent session, or broad permissions. */
 export async function openScholarSearch(
   query: SearchQuery,
@@ -80,10 +76,13 @@ export async function openScholarSearch(
   const initialUrl = buildScholarUrl(query);
   if (active) throw new Error('A Google Scholar search is already running.');
   const location = pathToFileURL(path.join(__dirname, '../dist/scholar.html')).href;
-  const remoteSession = session.fromPartition(`apt-scholar-${randomUUID()}`, { cache: false });
+  const remoteSession = session.fromPartition(SCHOLAR_PARTITION, { cache: false });
   remoteSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   remoteSession.setPermissionCheckHandler(() => false);
   remoteSession.setDevicePermissionHandler(() => false);
+  configureSpellchecker(remoteSession);
+  await wipe(remoteSession);
+  if (active) throw new Error('A Google Scholar search is already running.');
   const browser = new BrowserWindow({
     width: 1180,
     height: 900,
@@ -129,6 +128,7 @@ export async function openScholarSearch(
   let budgetStartedAt = 0;
   let budgetTimer: ReturnType<typeof setTimeout> | undefined;
   let resumeVerification: (() => void) | null = null;
+  let continueAfterConsent = false;
   let mainHttpStatus = 200;
   let resolveSearch: (response: SearchResponse | null) => void;
   const result = new Promise<SearchResponse | null>((resolve) => {
@@ -149,6 +149,10 @@ export async function openScholarSearch(
   function notice(value: string): void {
     message = value;
     sendState();
+  }
+  function onDownload(event: Electron.Event): void {
+    event.preventDefault();
+    notice('Downloads are disabled in the Google Scholar browser.');
   }
   function show(): void {
     if (closed || browser.isDestroyed()) return;
@@ -183,7 +187,9 @@ export async function openScholarSearch(
       );
     message = discard
       ? 'Search canceled. Collected papers were discarded.'
-      : error || reason || `Search complete. ${works.size} papers retrieved.`;
+      : error ||
+        reason ||
+        `Search complete. ${works.size} ${works.size === 1 ? 'paper' : 'papers'} retrieved.`;
     sendState();
     closed = true;
     pauseBudget();
@@ -202,7 +208,8 @@ export async function openScholarSearch(
       parent.show();
       parent.focus();
     }
-    void remoteSession.clearStorageData().catch(() => {});
+    remoteSession.removeListener('will-download', onDownload);
+    void wipe(remoteSession);
     resolveSearch!(
       discard
         ? null
@@ -240,6 +247,8 @@ export async function openScholarSearch(
       notice('Choose Stop and keep results or Cancel before closing the app.');
       show();
     },
+    waitingForUser: () => !closed && phase === 'verification',
+    discard: () => finish(undefined, true),
   };
   function guardParentClose(event: Electron.Event): void {
     if (!closed) {
@@ -291,11 +300,14 @@ export async function openScholarSearch(
       if (abort.signal.aborted) canceled();
     });
   }
-  async function verification(): Promise<void> {
+  async function verification(consent: boolean): Promise<void> {
     phase = 'verification';
+    continueAfterConsent = consent;
     pauseBudget();
     notice(
-      'Google requires verification or sign-in. Complete it yourself here, then choose Resume.',
+      consent
+        ? 'Google is asking for cookie consent. Choose an option in this window; the search continues automatically.'
+        : 'Google requires verification or sign-in. Complete it yourself here, then choose Resume.',
     );
     show();
     await new Promise<void>((resolve, reject) => {
@@ -311,6 +323,7 @@ export async function openScholarSearch(
       abort.signal.addEventListener('abort', canceled, { once: true });
       if (abort.signal.aborted) canceled();
     });
+    continueAfterConsent = false;
     if (closed) return;
     phase = 'searching';
     startBudget();
@@ -368,16 +381,25 @@ export async function openScholarSearch(
       );
     }
   });
-  remoteSession.on('will-download', (event) => {
-    event.preventDefault();
-    notice('Downloads are disabled in the Google Scholar browser.');
-  });
+  remoteSession.on('will-download', onDownload);
   remote.on('did-navigate', (_event, _url, status) => {
     mainHttpStatus = status;
     sendState();
   });
   remote.on('did-start-loading', sendState);
-  remote.on('did-stop-loading', sendState);
+  remote.on('did-stop-loading', () => {
+    sendState();
+    // After the user answers the consent page, Google returns to Scholar: read that page without
+    // waiting for a separate Resume click. Nothing is submitted or reloaded by the app.
+    if (
+      continueAfterConsent &&
+      !closed &&
+      !remote.isDestroyed() &&
+      !remote.isLoadingMainFrame() &&
+      isScholarSearchLocation(remote.getURL())
+    )
+      control('resume');
+  });
   remote.on('render-process-gone', () =>
     finish('The Google Scholar page stopped responding. Retrieved papers were kept.'),
   );
@@ -449,12 +471,12 @@ export async function openScholarSearch(
           throw new Error(
             'The Google Scholar page changed while it was being read. Retrieved papers were kept.',
           );
-        if (page.status === 'captcha' || page.status === 'login') {
+        if (page.status === 'captcha' || page.status === 'login' || page.status === 'consent') {
           if (!allowedNavigation(pageUrl) || page.interactiveVerification !== true)
             throw new Error(
               'Google Scholar refused this request without an interactive verification option. Try again later.',
             );
-          await verification();
+          await verification(page.status === 'consent');
           loadNext = false;
           continue;
         }

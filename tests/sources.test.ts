@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, searchSources, SOURCES } from '../src/services/sources';
+import { CROSSREF_PUBLICATION_TYPES } from '../src/core/worktype';
 import type { SearchQuery, SearchResponse } from '../src/types';
 
 const query = (changes: Partial<SearchQuery> = {}): SearchQuery => ({
@@ -151,18 +152,20 @@ describe('source boundary', () => {
   });
 
   it('bounds a stalled network request and reports timeout', async () => {
+    // Pacing state outlives a test, so measure from when the request really started.
+    let began = 0;
     vi.stubGlobal(
       'fetch',
-      vi.fn(
-        (_url, options) =>
-          new Promise((_resolve, reject) =>
-            options.signal.addEventListener('abort', () => reject(new Error('aborted'))),
-          ),
-      ),
+      vi.fn((_url, options) => {
+        began = Date.now();
+        return new Promise((_resolve, reject) =>
+          options.signal.addEventListener('abort', () => reject(new Error('aborted'))),
+        );
+      }),
     );
     const response = await finish(searchSources(query(), DEFAULT_SETTINGS));
     expect(response.results[0].error).toContain('did not respond in time');
-    expect(Date.now() - clock).toBe(15000);
+    expect(Date.now() - began).toBe(15000);
   });
 
   it('ignores invalid credential types and header-injection strings', async () => {
@@ -187,7 +190,7 @@ describe('source boundary', () => {
         meta: { count: 1000, next_cursor: String(++page) },
         results: Array.from({ length: 100 }, () => ({
           id: 'https://openalex.org/W1',
-          title: 'Duplicate record',
+          display_name: 'Duplicate record',
         })),
       }),
     );
@@ -230,7 +233,11 @@ describe('source boundary', () => {
     expect(url.searchParams.get('query.bibliographic')).toBe(malicious);
     expect(url.searchParams.get('rows')).toBe('10');
     expect(url.searchParams.get('filter')).toBe(
-      'from-pub-date:2020-01-01,until-pub-date:2024-12-31',
+      [
+        'from-pub-date:2020-01-01',
+        'until-pub-date:2024-12-31',
+        ...CROSSREF_PUBLICATION_TYPES.map((type) => `type:${type}`),
+      ].join(','),
     );
   });
 });
@@ -308,6 +315,11 @@ describe('provider normalization and search semantics', () => {
               publication_year: 2024,
               authorships: [{ author: { display_name: 'Jane Smith' } }],
               cited_by_count: 0,
+              counts_by_year: [
+                { year: 2025, cited_by_count: 2 },
+                { year: 2024, cited_by_count: 0 },
+                { year: 'invalid', cited_by_count: 1 },
+              ],
               abstract_inverted_index: { Hello: [0], world: [1] },
               open_access: { is_oa: true, oa_url: 'https://example.org/paper' },
               primary_location: { source: { display_name: 'A journal' } },
@@ -333,6 +345,11 @@ describe('provider normalization and search semantics', () => {
       isOpenAccess: true,
       citations: 0,
       venue: 'A journal',
+      authorsComplete: true,
+      citationHistory: [
+        { year: 2025, citations: 2, source: 'openalex' },
+        { year: 2024, citations: 0, source: 'openalex' },
+      ],
     });
   });
 
@@ -384,7 +401,7 @@ describe('provider normalization and search semantics', () => {
       isOpenAccess: true,
     });
     expect(new URL(fetcher.mock.calls[0][0]).searchParams.get('query')).toBe(
-      'DOI:"10.1234/target" AND FIRST_PDATE:[2020-01-01 TO 2023-12-31]',
+      'DOI:"10.1234/target" AND PUB_YEAR:[2020 TO 2023]',
     );
   });
 
@@ -434,7 +451,7 @@ describe('provider normalization and search semantics', () => {
     expect(response.results[0].works[0]).toMatchObject({
       id: 'pubmed:123456',
       title: 'A nested title',
-      abstract: 'A useful finding.',
+      abstract: 'BACKGROUND: A useful finding.',
       authors: ['Jane Smith'],
       year: 2021,
       doi: '10.1234/paper',

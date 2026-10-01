@@ -5,17 +5,34 @@ import {
   dialog,
   ipcMain,
   Menu,
+  net,
   safeStorage,
   shell,
+  type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { SearchQuery, SourceId } from '../src/types';
+import type { SearchQuery } from '../src/types';
 import { searchSources } from '../src/services/sources';
 import { createDesktopStore, MAX_FILE_BYTES, validateSettings } from './store';
-import { controlScholarSearch, openScholarSearch, preventScholarSearchLoss } from './scholar';
+import {
+  controlScholarSearch,
+  discardScholarSearch,
+  openScholarSearch,
+  preventScholarSearchLoss,
+  scholarSearchState,
+} from './scholar';
+import { createFlushCoordinator } from './flush';
+import { readImportFile } from './import-file';
+import { isAppLocation } from './navigation';
+import { validateQuery } from './query';
+import { createQuitCoordinator } from './quit';
+import { createCrashRecovery, type RecoveryAction } from './recovery';
+import { runProviderSearch } from './search';
+import { configureSpellchecker } from './session-policy';
+import { createUnsavedWorkGuard } from './unsaved';
 
 app.setName('Academic Publication Tracker');
 app.setAppUserModelId('org.academicpublicationtracker.desktop');
@@ -25,16 +42,6 @@ if (!app.isPackaged && process.env.APT_USER_DATA_DIR) {
   app.setPath('userData', process.env.APT_USER_DATA_DIR);
 }
 
-const sourceIds = new Set<SourceId>([
-  'openalex',
-  'crossref',
-  'europepmc',
-  'pubmed',
-  'semantic',
-  'arxiv',
-  'preprints',
-  'datacite',
-]);
 let window: BrowserWindow | null = null;
 let searching = false;
 const ownsInstance = app.requestSingleInstanceLock();
@@ -44,43 +51,6 @@ app.on('second-instance', () => {
   window?.show();
   window?.focus();
 });
-
-function validateQuery(value: unknown): SearchQuery {
-  if (!value || typeof value !== 'object') throw new Error('Invalid search request.');
-  const query = value as SearchQuery;
-  if (
-    typeof query.text !== 'string' ||
-    !query.text.trim() ||
-    query.text.length > 500 ||
-    !['topic', 'author', 'doi'].includes(query.mode) ||
-    !Array.isArray(query.sources) ||
-    !query.sources.length ||
-    query.sources.length > sourceIds.size ||
-    query.sources.some((source) => !sourceIds.has(source)) ||
-    !Number.isInteger(query.limit) ||
-    query.limit < 1 ||
-    query.limit > 200
-  ) {
-    throw new Error(
-      'Enter a search term, choose at least one supported source, and request 1–200 results per source.',
-    );
-  }
-  const latestYear = new Date().getFullYear() + 1;
-  for (const year of [query.yearFrom, query.yearTo]) {
-    if (year !== undefined && (!Number.isInteger(year) || year < 1500 || year > latestYear))
-      throw new Error(`Years must be between 1500 and ${latestYear}.`);
-  }
-  if (query.yearFrom !== undefined && query.yearTo !== undefined && query.yearFrom > query.yearTo)
-    throw new Error('The first year must not be after the last year.');
-  return {
-    text: query.text.trim(),
-    mode: query.mode,
-    sources: [...new Set(query.sources)],
-    limit: query.limit,
-    yearFrom: query.yearFrom,
-    yearTo: query.yearTo,
-  };
-}
 
 function externalUrl(value: unknown): string {
   if (typeof value !== 'string' || value.length > 8192) throw new Error('Invalid external link.');
@@ -110,27 +80,85 @@ function rendererLocation(): string {
   return pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
 }
 
-function installIpc(location: string): void {
+function installIpc(location: string) {
   const store = createDesktopStore(app.getPath('userData'), safeStorage);
-  let quitAfterFlush = false;
+  function fromApplication(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
+    return !!(
+      window &&
+      event.sender === window.webContents &&
+      event.senderFrame === window.webContents.mainFrame &&
+      event.senderFrame.url.split('#')[0] === location
+    );
+  }
+  // Before a window closes or the app quits, the interface is asked to save what it still holds
+  // (notes and tags are saved shortly after typing); it is never waited for longer than 2 seconds.
+  const flush = createFlushCoordinator({
+    timeoutMs: 2000,
+    send: (id) => {
+      if (
+        !window ||
+        window.isDestroyed() ||
+        window.webContents.isDestroyed() ||
+        window.webContents.isCrashed()
+      )
+        return false;
+      window.webContents.send('apt:flush', id);
+      return true;
+    },
+  });
+  ipcMain.on('apt:flushed', (event, id: unknown) => {
+    if (fromApplication(event)) flush.acknowledge(id);
+  });
+  // Work the interface holds only in memory (search results or edits it could not save): closing
+  // the window or quitting asks first, once the interface has had its chance to save.
+  const unsaved = createUnsavedWorkGuard({
+    fromApplication,
+    confirm: async (description, action) => {
+      const { response } = await dialog.showMessageBox({
+        type: 'warning',
+        buttons: ['Go back', action === 'quit' ? 'Quit without saving' : 'Close without saving'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Unsaved work',
+        message: action === 'quit' ? 'Quit without saving?' : 'Close the window without saving?',
+        detail: `${description}\n\nThis work has not been saved and will be lost. Choose Go back to keep it.`,
+      });
+      return response === 1;
+    },
+  });
+  ipcMain.on('apt:unsaved-work', (event, value: unknown) => unsaved.report(event, value));
+  const quitting = createQuitCoordinator({
+    searchState: scholarSearchState,
+    guardSearch: () => {
+      preventScholarSearchLoss();
+    },
+    // Waiting for Google verification has no time limit, so it must not be able to block the
+    // operating system from logging out or shutting down.
+    confirmDiscardSearch: async () => {
+      const { response } = await dialog.showMessageBox({
+        type: 'question',
+        buttons: ['Quit and discard the search', 'Keep waiting'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'Google Scholar search in progress',
+        message: 'Quit while the Google Scholar search is waiting for you?',
+        detail:
+          'The search is paused for Google verification or consent. Quitting now discards the publications it has collected so far. To keep them, choose Stop in the Google Scholar window first.',
+      });
+      return response === 0;
+    },
+    discardSearch: discardScholarSearch,
+    flushInterface: () => flush.request(),
+    flushStore: () => store.flush(),
+    confirmUnsavedWork: () => unsaved.confirmLoss('quit'),
+    quit: () => app.quit(),
+  });
   app.on('before-quit', (event) => {
-    if (preventScholarSearchLoss()) {
-      event.preventDefault();
-      return;
-    }
-    if (quitAfterFlush) return;
-    event.preventDefault();
-    quitAfterFlush = true;
-    void store.flush().finally(() => app.quit());
+    if (quitting.beforeQuit()) event.preventDefault();
   });
   function handle(channel: string, callback: (...args: unknown[]) => unknown): void {
     ipcMain.handle(channel, (event: IpcMainInvokeEvent, ...args: unknown[]) => {
-      if (
-        !window ||
-        event.sender !== window.webContents ||
-        event.senderFrame !== window.webContents.mainFrame ||
-        event.senderFrame.url.split('#')[0] !== location
-      ) {
+      if (!fromApplication(event)) {
         throw new Error('This request did not originate from the application.');
       }
       return callback(...args);
@@ -138,6 +166,7 @@ function installIpc(location: string): void {
   }
   handle('apt:workspace:load', () => store.loadWorkspace());
   handle('apt:workspace:save', (value) => store.saveWorkspace(value));
+  handle('apt:workspace:notice', () => store.recoveryNotice());
   handle('apt:settings:load', () => store.loadSettings());
   handle('apt:settings:save', (value) => store.saveSettings(validateSettings(value)));
   handle('apt:search', async (value) => {
@@ -145,7 +174,13 @@ function installIpc(location: string): void {
     if (searching) throw new Error('A search is already running. Wait for it to finish.');
     searching = true;
     try {
-      return await searchSources(query, await store.loadSettings());
+      // Provider requests go through Electron's network stack, which honours the operating
+      // system's proxy, PAC and certificate settings. (The adapters take it as `options.fetch`.)
+      return await runProviderSearch(query, {
+        store,
+        search: searchSources,
+        fetch: net.fetch.bind(net) as typeof fetch,
+      });
     } finally {
       searching = false;
     }
@@ -193,19 +228,27 @@ function installIpc(location: string): void {
       title: 'Import publications or workspace',
       properties: ['openFile'],
       filters: [
-        { name: 'Publication data', extensions: ['json', 'csv', 'bib', 'bibtex', 'ris', 'txt'] },
+        {
+          name: 'Publication data',
+          extensions: ['json', 'csv', 'tsv', 'bib', 'bibtex', 'ris', 'txt'],
+        },
       ],
     });
     if (result.canceled || !result.filePaths[0]) return null;
     const file = result.filePaths[0];
-    if ((await stat(file)).size > MAX_FILE_BYTES)
-      throw new Error('Choose a file smaller than 25 MB.');
-    return { name: path.basename(file), content: await readFile(file, 'utf8') };
+    return { name: path.basename(file), content: await readImportFile(file) };
   });
+  return {
+    flushInterface: () => flush.request(),
+    confirmClose: () => unsaved.confirmLoss('close'),
+    unsavedWork: () => unsaved.reported(),
+    forgetUnsavedWork: () => unsaved.forget(),
+    quitFinished: () => quitting.finished,
+  };
 }
 
-function createWindow(location: string): void {
-  window = new BrowserWindow({
+function createWindow(location: string, services: ReturnType<typeof installIpc>): void {
+  const created = new BrowserWindow({
     width: 1480,
     height: 940,
     minWidth: 1060,
@@ -221,18 +264,117 @@ function createWindow(location: string): void {
       webSecurity: true,
     },
   });
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.webContents.on('will-navigate', (event) => event.preventDefault());
-  window.webContents.on('will-attach-webview', (event) => event.preventDefault());
-  window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) =>
+  window = created;
+  created.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // Only the application's own page may be navigated to; reloading it (the error screen's
+  // "Reload app") is one of those navigations.
+  created.webContents.on('will-navigate', (event) => {
+    if (!isAppLocation(event.url, location)) event.preventDefault();
+  });
+  created.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  created.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) =>
     callback(false),
   );
-  window.webContents.session.setPermissionCheckHandler(() => false);
-  window.once('ready-to-show', () => window?.show());
-  window.on('closed', () => {
-    window = null;
+  created.webContents.session.setPermissionCheckHandler(() => false);
+  configureSpellchecker(created.webContents.session);
+
+  // A crashed or failed page is reloaded a few times, then the user decides.
+  const recovery = createCrashRecovery();
+  const alive = () => (window === created && !created.isDestroyed() ? created : null);
+  function recover(action: RecoveryAction, reason: string, how: 'reload' | 'load'): void {
+    if (action === 'ignore') return;
+    if (action === 'reload') {
+      setTimeout(() => {
+        if (!alive()) return;
+        if (how === 'load') void created.loadURL(location).catch(() => undefined);
+        else created.webContents.reload();
+      }, 300);
+      return;
+    }
+    if (!alive()) return;
+    // Not attached to the window: it may never have been shown if its page could not load at all.
+    void dialog
+      .showMessageBox({
+        type: 'error',
+        buttons: ['Try again', 'Quit'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'Academic Publication Tracker',
+        message: 'The window could not be restored.',
+        detail: `${reason} Your saved workspace is not affected.`,
+      })
+      .then(({ response }) => {
+        if (response === 0) {
+          recovery.reset();
+          recover('reload', reason, how);
+        } else app.quit();
+      });
+  }
+  created.webContents.on('render-process-gone', (_event, details) =>
+    recover(
+      recovery.rendererGone(details.reason),
+      `The window's page stopped unexpectedly (${details.reason}).`,
+      'reload',
+    ),
+  );
+  created.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) =>
+    recover(
+      recovery.loadFailed(code, isMainFrame),
+      `The window's page could not be loaded (${description}).`,
+      'load',
+    ),
+  );
+  let asking = false;
+  created.on('unresponsive', () => {
+    console.warn('The application window is not responding.');
+    const target = alive();
+    if (asking || !target) return;
+    asking = true;
+    // Reloading loses what the page holds only in memory.
+    const unsaved = services.unsavedWork();
+    void dialog
+      .showMessageBox(target, {
+        type: 'warning',
+        buttons: ['Wait', 'Reload'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Academic Publication Tracker',
+        message: 'The window is not responding.',
+        detail: `Choose Wait to give it more time, or Reload to restart the window. Your saved workspace is not affected.${unsaved ? `\n\n${unsaved}\n\nThis work has not been saved and is lost if you reload.` : ''}`,
+      })
+      .then(({ response }) => {
+        asking = false;
+        // The crash handler above reloads the page.
+        if (response === 1 && alive()) created.webContents.forcefullyCrashRenderer();
+      });
   });
-  void window.loadURL(location);
+
+  created.once('ready-to-show', () => created.show());
+  // Closing the window (which on macOS keeps the app running) first lets the interface save, then
+  // asks before losing what it could not save.
+  let closeFlushed = false;
+  created.on('close', (event) => {
+    if (closeFlushed) {
+      closeFlushed = false;
+      return;
+    }
+    if (services.quitFinished()) return;
+    event.preventDefault();
+    void services.flushInterface().finally(async () => {
+      if (!(await services.confirmClose()) || created.isDestroyed()) return;
+      closeFlushed = true;
+      created.close();
+    });
+  });
+  created.on('closed', () => {
+    if (window === created) window = null;
+    // What the page held only in memory is gone with it.
+    services.forgetUnsavedWork();
+  });
+  // So is what a reloaded or crashed page held.
+  created.webContents.on('did-navigate', () => services.forgetUnsavedWork());
+  created.webContents.on('render-process-gone', () => services.forgetUnsavedWork());
+  void created.loadURL(location).catch(() => undefined);
 }
 
 if (ownsInstance)
@@ -240,7 +382,7 @@ if (ownsInstance)
     .whenReady()
     .then(() => {
       const location = rendererLocation();
-      installIpc(location);
+      const services = installIpc(location);
       const template: Electron.MenuItemConstructorOptions[] = [
         ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
         {
@@ -262,9 +404,9 @@ if (ownsInstance)
         { role: 'windowMenu' },
       ];
       Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-      createWindow(location);
+      createWindow(location, services);
       app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) createWindow(location);
+        if (BrowserWindow.getAllWindows().length === 0) createWindow(location, services);
       });
     })
     .catch((error) => {

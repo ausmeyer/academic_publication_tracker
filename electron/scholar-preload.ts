@@ -26,7 +26,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   ipcRenderer.on('apt:scholar:state', (_event, state: ToolbarState) => {
     resume.disabled = state.phase !== 'verification' || state.busy;
-    count.textContent = `${state.count} / ${state.limit} papers · ${state.pages} pages`;
+    count.textContent = `${state.count} / ${state.limit} papers · ${state.pages} ${state.pages === 1 ? 'page' : 'pages'}`;
     status.textContent = state.message;
     location.textContent = state.url || 'Opening Google Scholar…';
   });

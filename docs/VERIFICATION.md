@@ -1,4 +1,20 @@
-# Verification record — version 0.4.3
+# Verification record
+
+## Version 0.5.0 release candidate — September 30, 2026
+
+The sections after this one record the released v0.4.3 checks and are kept as they were. Everything here was run on macOS Apple Silicon with Node.js 26.7.0 against the working tree described under 0.5.0 in the [changelog](../CHANGELOG.md).
+
+How it was checked: an independent audit (code reading plus runs against real providers); fixes written test-first by parallel packages in isolated copies; three rounds of review in which fresh reviewers tried to break the result and found several dozen further defects (all since fixed, or recorded below as limits); then everything listed here on the merged tree.
+
+- Type check, production build and Prettier: pass. `npm audit`: no vulnerabilities (Electron 44.5.1).
+- 1,444 unit tests in 96 files pass. 405 browser tests pass (Chromium at 1440×1050, with layout, contrast and overflow checks also at 1060×700 and 820×900 and with zoomed dialogs); the whole suite then ran twice more in a row without a failure. Tests that guard a fix were checked by reverting the fix and watching them fail.
+- Native desktop checks: the desktop smoke (sixteen consecutive runs of the final script; disabling the unsaved-work guard makes it fail) and the Scholar smoke pass on the development runtime, and both pass on a packaged, ad-hoc-signed Apple Silicon build made outside the synced folder, whose fuses and macOS entitlements were read from the built app (`app.asar` holds 13 entries). The unsaved-work scenarios put a directory where the recovery copy belongs, so real saves fail.
+- Live providers, small requests without API keys: 17 scripted adapter checks and 14 checks that drive the app with real results pass (see [data sources](DATA_SOURCES.md)).
+- Real data: a copy of the maintainer's existing version 1 workspace (4 searches, 336 papers) was loaded through the validator and the desktop store and migrated to version 2, with `workspace.json.v1.bak` holding the exact original bytes; it was refreshed against itself without losing a curated paper and round-tripped through JSON, CSV, BibTeX and RIS without losing a paper. The copies were deleted afterwards and the original file was not touched.
+- Not verified: the Windows build and installer of this tree, and the layout tests with Windows fonts (the CI workflow will show); a Developer ID–signed, notarized build with library validation on (see [RELEASING.md](RELEASING.md)); live Google Scholar pages, including the cookie-consent page (synthetic pages only); live Semantic Scholar year and hyphen handling, arXiv, and requests that use API keys; macOS logout or restart while the unsaved-work question is open.
+- Known limits: merging the same records twice can still differ when copies of one paper report different years (about 34 of 20,000 random sets); a refresh is not perfectly idempotent when a provider retypes a record; ASCII-folded and transliterated umlaut spellings of a given name do not match each other; Electron's own license and the Chromium notices are not in the macOS packages (the Windows ones have them).
+
+## Version 0.4.3 — September 14–15, 2026
 
 Checks were performed on macOS Apple Silicon on September 14–15, 2026, using Node.js 26.7.0 and npm 11.19.0. The GitHub workflow also specifies native macOS and Windows runners with Node.js 24.
 
@@ -81,4 +97,4 @@ node scripts/smoke-electron.mjs --packaged
 node scripts/smoke-scholar.mjs --packaged
 ```
 
-The native smoke uses an automatically removed temporary profile. It does not read or replace an existing user workspace. Browser tests use isolated browser contexts and synthetic fixtures; those fixtures are not shipped as example research data.
+Use `APT_DEV_PORT=<port>` to run the browser tests on another port, and `APT_USER_DATA_DIR=/absolute/path` to keep an unpackaged desktop run away from your real workspace. The native smoke uses an automatically removed temporary profile. It does not read or replace an existing user workspace. Browser tests use isolated browser contexts and synthetic fixtures; those fixtures are not shipped as example research data.

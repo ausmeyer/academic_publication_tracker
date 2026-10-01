@@ -11,6 +11,8 @@ export default function Metrics({
   excluded: number;
   onHelp: () => void;
 }) {
+  // With no known count, a zero would claim "no citations" instead of "unknown".
+  const known = metrics.citationCoverage > 0;
   return (
     <div className="metrics-grid">
       <div className="metric-card">
@@ -28,7 +30,7 @@ export default function Metrics({
           Citations
           <Quote size={17} />
         </div>
-        <div className="metric-value">{formatNumber(metrics.citations)}</div>
+        <div className="metric-value">{known ? formatNumber(metrics.citations) : '—'}</div>
         <div className="metric-caption">
           <span className="small-dot" />
           {formatNumber(metrics.citationCoverage)} of {formatNumber(metrics.papers)} papers have
@@ -36,30 +38,44 @@ export default function Metrics({
         </div>
       </div>
       <button className="metric-card metric-button" onClick={onHelp}>
-        <div className="metric-label">
+        <span className="metric-label">
           h-index
           <TrendingUp size={17} />
-        </div>
-        <div className="metric-value">
-          {metrics.hIndex}
-          <span className="metric-unit">h</span>
-        </div>
-        <div className="metric-caption">
-          {metrics.citationCoverage < metrics.papers
-            ? 'Lower bound · incomplete coverage'
-            : 'Publication impact over time'}
-        </div>
+        </span>
+        <span className="metric-value">
+          {known ? (
+            <>
+              {metrics.hIndex}
+              <span className="metric-unit">h</span>
+            </>
+          ) : (
+            '—'
+          )}
+        </span>
+        <span className="metric-caption">
+          {!known
+            ? 'No citation counts yet'
+            : metrics.citationCoverage < metrics.papers
+              ? 'Lower bound · incomplete coverage'
+              : 'Publication impact over time'}
+        </span>
       </button>
       <button className="metric-card metric-button" onClick={onHelp}>
-        <div className="metric-label">
+        <span className="metric-label">
           g-index
           <BarChart3 size={17} />
-        </div>
-        <div className="metric-value">
-          {metrics.gIndex}
-          <span className="metric-unit">g</span>
-        </div>
-        <div className="metric-caption">Greater weight to highly cited work</div>
+        </span>
+        <span className="metric-value">
+          {known ? (
+            <>
+              {metrics.gIndex}
+              <span className="metric-unit">g</span>
+            </>
+          ) : (
+            '—'
+          )}
+        </span>
+        <span className="metric-caption">Greater weight to highly cited work</span>
       </button>
     </div>
   );

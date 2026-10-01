@@ -1,5 +1,6 @@
 import type { DesktopBridge, Settings, Workspace } from '../types';
 import { buildScholarUrl } from '../core/scholar';
+import { decodeImportBytes } from '../core/encoding';
 
 let previewSettings: Settings = {
   email: '',
@@ -7,8 +8,18 @@ let previewSettings: Settings = {
   semanticApiKey: '',
   ncbiApiKey: '',
 };
+/** The browser asks before the tab closes or reloads (the desktop shell asks on its own). */
+const askBeforeLeaving = (event: Event) => event.preventDefault();
 const preview: DesktopBridge = {
   onScholarProgress: () => () => {},
+  onFlushRequest: () => () => {},
+  setUnsavedWork(description) {
+    if (description) window.addEventListener('beforeunload', askBeforeLeaving);
+    else window.removeEventListener('beforeunload', askBeforeLeaving);
+  },
+  async recoveryNotice() {
+    return null;
+  },
   async controlScholar() {},
   async searchScholar(query) {
     await preview.openExternal(buildScholarUrl(query));
@@ -52,7 +63,7 @@ const preview: DesktopBridge = {
     return new Promise((resolve, reject) => {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.csv,.bib,.bibtex,.ris,.json';
+      input.accept = '.csv,.tsv,.txt,.bib,.bibtex,.ris,.json';
       input.addEventListener('cancel', () => resolve(null), { once: true });
       input.addEventListener(
         'change',
@@ -67,7 +78,10 @@ const preview: DesktopBridge = {
             return;
           }
           try {
-            resolve({ name: file.name, content: await file.text() });
+            resolve({
+              name: file.name,
+              content: decodeImportBytes(new Uint8Array(await file.arrayBuffer())),
+            });
           } catch (error) {
             reject(error);
           }

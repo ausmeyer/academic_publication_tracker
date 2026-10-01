@@ -21,12 +21,24 @@ jobs:
           - os: windows-latest
             platform: win
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
           cache: npm
+      - name: Check that the tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          # Installer names come from package.json, so a mismatched tag would publish misnamed files.
+          version="$(node -p "require('./package.json').version")"
+          locked="$(node -p "require('./package-lock.json').packages[''].version")"
+          if [[ "$GITHUB_REF_NAME" != "v$version" || "$version" != "$locked" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json ($version) and package-lock.json ($locked)."
+            exit 1
+          fi
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
@@ -63,7 +75,7 @@ jobs:
           APT_SMOKE_SCREENSHOT: release/desktop-${{ matrix.platform }}.png
           APT_SEARCH_SCREENSHOT: release/search-${{ matrix.platform }}.png
       - name: Save desktop screenshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Desktop-screenshots-${{ matrix.platform }}
           if-no-files-found: error
@@ -82,7 +94,7 @@ jobs:
           if ($installation.ExitCode -ne 0) { throw "Installer failed: $($installation.ExitCode)" }
           node scripts/smoke-electron.mjs "$location/Academic Publication Tracker.exe"
           if ($LASTEXITCODE -ne 0) { throw 'Installed Windows app failed its smoke check.' }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Academic-Publication-Tracker-${{ matrix.platform }}
           if-no-files-found: error
@@ -96,20 +108,28 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: installers
           pattern: Academic-Publication-Tracker-*
           merge-multiple: true
-      - name: Create draft release with installers
+      - name: Create the draft release, or add installers to an existing draft
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)"
+            if [[ "$draft" != "true" ]]; then
+              echo "::error::Release $RELEASE_TAG is already published; its installers are not replaced."
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" installers/* --clobber
+          else
             gh release create "$RELEASE_TAG" installers/* --draft --verify-tag --generate-notes --title "Academic Publication Tracker $RELEASE_TAG"
           fi

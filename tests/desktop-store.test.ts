@@ -18,7 +18,7 @@ async function setup(crypto = encryption) {
 }
 function workspace(id: string): Workspace {
   return {
-    version: 1,
+    version: 2,
     activeId: id,
     snapshots: [
       {
@@ -88,8 +88,8 @@ describe('desktop workspace persistence', () => {
   it('rejects unsupported and malformed workspaces before touching existing data', async () => {
     const { store } = await setup();
     await store.saveWorkspace(workspace('valid'));
-    expect(() => store.saveWorkspace({ version: 2, snapshots: [], activeId: null })).toThrow();
-    expect(() => store.saveWorkspace({ version: 1, snapshots: [], activeId: 'missing' })).toThrow();
+    expect(() => store.saveWorkspace({ version: 3, snapshots: [], activeId: null })).toThrow();
+    expect(() => store.saveWorkspace({ version: 2, snapshots: [], activeId: 'missing' })).toThrow();
     expect(await store.loadWorkspace()).toEqual(workspace('valid'));
   });
 

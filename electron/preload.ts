@@ -1,9 +1,21 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopBridge } from '../src/types';
+import { createInvoker } from './ipc-error';
+
+// Every call goes through one helper so a failure reaches the interface as a plain message,
+// without Electron's "Error invoking remote method 'channel': Error:" prefix.
+const invoke = createInvoker(ipcRenderer);
+
+// Before the window closes or the app quits, main asks the interface to save what it still holds.
+const flushListeners = new Set<() => void | Promise<void>>();
+ipcRenderer.on('apt:flush', async (_event: Electron.IpcRendererEvent, request: unknown) => {
+  await Promise.allSettled([...flushListeners].map(async (listener) => listener()));
+  ipcRenderer.send('apt:flushed', request);
+});
 
 const bridge: DesktopBridge = {
-  search: (query) => ipcRenderer.invoke('apt:search', query),
-  searchScholar: (query) => ipcRenderer.invoke('apt:scholar:open', query),
+  search: (query) => invoke('apt:search', query),
+  searchScholar: (query) => invoke('apt:scholar:open', query),
   onScholarProgress: (listener) => {
     if (typeof listener !== 'function') throw new Error('A progress listener is required.');
     const handler = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof listener>[0]) =>
@@ -13,15 +25,25 @@ const bridge: DesktopBridge = {
       ipcRenderer.removeListener('apt:scholar:progress', handler);
     };
   },
-  controlScholar: (action) => ipcRenderer.invoke('apt:scholar:control', action),
-  loadWorkspace: () => ipcRenderer.invoke('apt:workspace:load'),
-  saveWorkspace: (workspace) => ipcRenderer.invoke('apt:workspace:save', workspace),
-  loadSettings: () => ipcRenderer.invoke('apt:settings:load'),
-  saveSettings: (settings) => ipcRenderer.invoke('apt:settings:save', settings),
-  exportFile: (data) => ipcRenderer.invoke('apt:file:export', data),
-  importFile: () => ipcRenderer.invoke('apt:file:import'),
-  openExternal: (url) => ipcRenderer.invoke('apt:external', url),
-  copyText: (text) => ipcRenderer.invoke('apt:clipboard:write', text),
+  controlScholar: (action) => invoke('apt:scholar:control', action),
+  loadWorkspace: () => invoke('apt:workspace:load'),
+  saveWorkspace: (workspace) => invoke('apt:workspace:save', workspace),
+  loadSettings: () => invoke('apt:settings:load'),
+  saveSettings: (settings) => invoke('apt:settings:save', settings),
+  exportFile: (data) => invoke('apt:file:export', data),
+  importFile: () => invoke('apt:file:import'),
+  openExternal: (url) => invoke('apt:external', url),
+  copyText: (text) => invoke('apt:clipboard:write', text),
+  onFlushRequest: (listener) => {
+    if (typeof listener !== 'function') throw new Error('A flush listener is required.');
+    flushListeners.add(listener);
+    return () => {
+      flushListeners.delete(listener);
+    };
+  },
+  recoveryNotice: () => invoke('apt:workspace:notice'),
+  // Main checks the value and asks before the window closes or the app quits while it is set.
+  setUnsavedWork: (description) => ipcRenderer.send('apt:unsaved-work', description),
 };
 
 contextBridge.exposeInMainWorld('desktop', Object.freeze(bridge));

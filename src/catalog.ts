@@ -90,9 +90,31 @@ export const sourceMark = (id: SourceId) =>
   })[id];
 export const formatNumber = (n: number) =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(n);
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+/** A date without a time is a calendar day, not midnight UTC (which is the day before west of UTC). */
+const parseDate = (value: string) => {
+  const day = DATE_ONLY.exec(value);
+  return day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : new Date(value);
+};
 export const formatDate = (value: string) =>
-  new Date(value).toLocaleDateString(undefined, {
+  parseDate(value).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
   });
+/** Date and local time, so two searches saved on the same day can be told apart. */
+export const formatDateTime = (value: string) =>
+  DATE_ONLY.test(value)
+    ? formatDate(value)
+    : new Date(value).toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+/** YYYY-MM-DD in the viewer's time zone (toISOString would name an evening backup for tomorrow). */
+export const localDateStamp = (date: Date) =>
+  [date.getFullYear(), date.getMonth() + 1, date.getDate()]
+    .map((part, index) => String(part).padStart(index ? 2 : 4, '0'))
+    .join('-');

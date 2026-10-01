@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildScholarUrl, getScholarNextUrl, normalizeScholarPage } from '../src/core/scholar';
+import {
+  buildScholarUrl,
+  getScholarNextUrl,
+  normalizeScholarPage,
+  SCHOLAR_SETTLED_CAPTURE_SCRIPT,
+} from '../src/core/scholar';
 import { calculateMetrics } from '../src/core/metrics';
 import type { SearchQuery } from '../src/types';
 
@@ -295,6 +300,7 @@ describe('Google Scholar captured page normalization', () => {
   it.each([
     ['login', /sign-in page/],
     ['captcha', /CAPTCHA/],
+    ['consent', /cookie consent/],
     ['unavailable', /unavailable/],
     ['empty', /no displayed publications/],
     ['unsupported', /not supported/],
@@ -309,5 +315,12 @@ describe('Google Scholar captured page normalization', () => {
     );
     expect(() => normalizeScholarPage(capture({ status: 'profile' }))).toThrow(/not supported/);
     expect(() => normalizeScholarPage(capture(), 'invalid')).toThrow(/capture time/);
+  });
+});
+
+describe('Google Scholar capture script', () => {
+  it('waits for the states a user can resolve before it reports a page as settled', () => {
+    for (const status of ['results', 'empty', 'captcha', 'login', 'consent', 'unavailable'])
+      expect(SCHOLAR_SETTLED_CAPTURE_SCRIPT).toContain(`'${status}'`);
   });
 });

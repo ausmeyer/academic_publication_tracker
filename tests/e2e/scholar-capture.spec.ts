@@ -11,13 +11,13 @@ const searchUrl = 'https://scholar.google.com/scholar?hl=en&q=forecasting';
 const profileUrl = 'https://scholar.google.com/citations?user=fixture-author&hl=en';
 
 // Every request is intercepted. These are local synthetic fixtures, never live Scholar extraction.
-async function fixture(page: Page, html: string, url = searchUrl) {
+async function fixture(page: Page, html: string, url = searchUrl, title = 'Google Scholar') {
   const requests: string[] = [];
   await page.route('**/*', async (route) => {
     requests.push(route.request().url());
     await route.fulfill({
       contentType: 'text/html; charset=utf-8',
-      body: `<!doctype html><html><head><title>Google Scholar</title></head><body>${html}</body></html>`,
+      body: `<!doctype html><html><head><title>${title}</title></head><body>${html}</body></html>`,
     });
   });
   await page.goto(url);
@@ -62,6 +62,7 @@ test('captures rendered results and citation totals without modifying or navigat
   expect(normalized.works[0]).toMatchObject({
     title: 'A prospective forecast evaluation',
     authors: ['J Scholar', 'A Researcher'],
+    authorsComplete: false,
     year: 2023,
     venue: 'Journal of Forecasting',
     doi: '10.1234/one',
@@ -355,3 +356,255 @@ for (const [name, html, message] of [
     expect(() => normalizeScholarPage(raw)).toThrow(message);
   });
 }
+
+// Byline format: "Authors - Venue, Year - Publisher". Only the trailing year of the middle part is the
+// publication year; arXiv identifiers, conference years and volume numbers must never be read as one.
+const bylineRow = (byline: string) =>
+  `<div class="gs_r gs_or" data-cid="byline"><h3 class="gs_rt"><a href="https://example.org/byline">A title</a></h3>
+    <div class="gs_a">${byline}</div><div class="gs_fl"><a href="/scholar?cites=byline&amp;hl=en">Cited by 1</a></div></div>`;
+
+for (const [name, byline, year, venue] of [
+  ['a plain venue and year', 'J Doe, A Roe - Nature, 2019 - nature.com', 2019, 'Nature'],
+  [
+    'an arXiv id that looks like a year (1810.04805)',
+    'J Devlin, MW Chang, K Lee, K Toutanova - arXiv preprint arXiv:1810.04805, 2018 - arxiv.org',
+    2018,
+    'arXiv preprint arXiv:1810.04805',
+  ],
+  [
+    'an arXiv id below the accepted year range (1412.6980)',
+    'DP Kingma, J Ba - arXiv preprint arXiv:1412.6980, 2014 - arxiv.org',
+    2014,
+    'arXiv preprint arXiv:1412.6980',
+  ],
+  [
+    'an arXiv id that looks like a recent year (2010.11929)',
+    'A Dosovitskiy, L Beyer - arXiv preprint arXiv:2010.11929, 2020 - arxiv.org',
+    2020,
+    'arXiv preprint arXiv:2010.11929',
+  ],
+  [
+    'an arXiv id with a different leading number (2005.14165)',
+    'TB Brown, B Mann - arXiv preprint arXiv:2005.14165, 2020 - arxiv.org',
+    2020,
+    'arXiv preprint arXiv:2005.14165',
+  ],
+  [
+    'a conference name that starts with its year',
+    'A Graves, A Mohamed, G Hinton - 2013 IEEE international conference on acoustics, speech and signal …, 2013 - ieeexplore.ieee.org',
+    2013,
+    '2013 IEEE international conference on acoustics, speech and signal …',
+  ],
+  [
+    'a venue that names another year than the publication year',
+    'A Author - Proceedings of the 1998 workshop on things, 1999 - acm.org',
+    1999,
+    'Proceedings of the 1998 workshop on things',
+  ],
+  ['a preprint server', 'J Doe - medRxiv, 2021 - medrxiv.org', 2021, 'medRxiv'],
+  [
+    'a volume number before the year',
+    'J Doe - Advances in neural information processing systems 30, 2017 - proceedings.neurips.cc',
+    2017,
+    'Advances in neural information processing systems 30',
+  ],
+  [
+    'a venue with a year of its own',
+    'J Doe - IEEE Access 2021, 2021 - ieee.org',
+    2021,
+    'IEEE Access 2021',
+  ],
+  ['a publisher but no year', 'J Doe - Springer - books.google.com', null, 'Springer'],
+  ['a book with only a year', 'JR Smith - 2001 - Oxford University Press', 2001, ''],
+  [
+    'a truncated author list',
+    'J Doe, A Roe… - Journal of Forecasting, 2023 - Wiley Online Library',
+    2023,
+    'Journal of Forecasting',
+  ],
+] as const) {
+  test(`reads the publication year and venue from a byline with ${name}`, async ({ page }) => {
+    await fixture(page, bylineRow(byline));
+    const raw = (await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)) as {
+      records: { year: number | null; venue: string }[];
+    };
+    expect(raw.records[0]).toMatchObject({ year, venue });
+    const normalized = normalizeScholarPage(raw, retrievedAt);
+    expect(normalized.works[0]).toMatchObject({ year, venue });
+  });
+}
+
+test('does not let an arXiv identifier stretch the citations-per-year denominator across centuries', async ({
+  page,
+}) => {
+  await fixture(
+    page,
+    bylineRow('J Devlin, K Toutanova - arXiv preprint arXiv:1810.04805, 2018 - arxiv.org') +
+      bylineRow('J Doe - Nature, 2019 - nature.com').replace('byline', 'second'),
+  );
+  const { works } = normalizeScholarPage(await page.evaluate(SCHOLAR_CAPTURE_SCRIPT), retrievedAt);
+  expect(works.map((work) => work.year)).toEqual([2018, 2019]);
+});
+
+// Ordinary queries put their words in the page title ("<query> - Google Scholar") and snippets quote
+// error messages. Neither is a refusal while result rows are displayed.
+for (const query of [
+  'error correction',
+  'error-prone sequencing',
+  'errors in medicine',
+  'access denied policies',
+  'too many requests rate limiting',
+  'service unavailable',
+  'sign in behavior',
+  'Sign-in security',
+]) {
+  test(`reads displayed results for the query "${query}" instead of classifying the page title`, async ({
+    page,
+  }) => {
+    await fixture(page, result('one', 'A relevant paper'), searchUrl, `${query} - Google Scholar`);
+    const raw = (await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)) as { status: string; records: [] };
+    expect(raw.status).toBe('results');
+    expect(raw.records).toHaveLength(1);
+  });
+
+  test(`reports a zero-result query "${query}" as empty, not as a refusal or sign-in`, async ({
+    page,
+  }) => {
+    await fixture(
+      page,
+      `<p>Your search - ${query} - did not match any articles.</p>`,
+      searchUrl,
+      `${query} - Google Scholar`,
+    );
+    expect(await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)).toMatchObject({ status: 'empty' });
+  });
+}
+
+for (const snippet of [
+  "Sorry, we can't complete your request appears on many error pages",
+  'Our systems have detected unusual traffic from your computer network is a familiar message',
+  "To continue, please type the characters below is a phrase from CAPTCHA pages; please show you're not a robot",
+  'Your client does not have permission to get the URL appears in server logs',
+]) {
+  test(`reads a displayed result whose snippet quotes "${snippet.slice(0, 32)}…"`, async ({
+    page,
+  }) => {
+    await fixture(
+      page,
+      result('one', 'A paper about error pages').replace(
+        'A visible snippet, which may be abbreviated.',
+        snippet,
+      ),
+    );
+    const raw = (await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)) as {
+      status: string;
+      records: { snippet: string }[];
+    };
+    expect(raw.status).toBe('results');
+    expect(raw.records[0].snippet).toBe(snippet);
+  });
+}
+
+for (const [name, title, html, status] of [
+  ['an access-denied title', 'Access denied', '<h1>Forbidden</h1>', 'unavailable'],
+  [
+    'a Google error page title',
+    'Error 403 (Forbidden)!!1',
+    '<p>That is an error.</p>',
+    'unavailable',
+  ],
+  ['a service error title', 'Service Unavailable', '<p>Try again later.</p>', 'unavailable'],
+  ['a rate limit title', 'Too Many Requests', '<p>Slow down.</p>', 'unavailable'],
+  ["Google's sign-in title", 'Sign in - Google Accounts', '<p>Continue to Google</p>', 'login'],
+  [
+    'unusual-traffic text without a form',
+    'Google Scholar',
+    '<p>Our systems have detected unusual traffic from your computer network.</p>',
+    'captcha',
+  ],
+] as const) {
+  test(`still recognizes ${name} when no result rows are displayed`, async ({ page }) => {
+    await fixture(page, html, searchUrl, title);
+    expect(await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)).toMatchObject({ status });
+  });
+}
+
+test('keeps structural CAPTCHA detection even when result-like rows are present', async ({
+  page,
+}) => {
+  await fixture(
+    page,
+    result('one', 'A paper') + '<form id="captcha-form"><input name="captcha"></form>',
+  );
+  expect(await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)).toMatchObject({
+    status: 'captcha',
+    interactiveVerification: true,
+  });
+});
+
+// Visitors in some regions (EU/UK) are sent to Google's cookie-consent interstitial before any
+// results. Only the user may choose an option there; the collector merely recognizes the page.
+const consentForm =
+  '<h1>Before you continue to Google</h1><form action="https://consent.google.com/save" method="post"><button>Reject all</button><button>Accept all</button></form>';
+
+for (const host of ['consent.google.com', 'consent.google.de', 'consent.google.co.uk']) {
+  test(`recognizes the cookie-consent interstitial on ${host} as a step only the user can take`, async ({
+    page,
+  }) => {
+    await fixture(
+      page,
+      consentForm,
+      `https://${host}/ml?continue=${encodeURIComponent(searchUrl)}`,
+    );
+    expect(await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)).toMatchObject({
+      status: 'consent',
+      interactiveVerification: true,
+      nextUrl: null,
+      records: [],
+    });
+  });
+}
+
+test('does not pause for a consent page that offers no usable control', async ({ page }) => {
+  await fixture(
+    page,
+    '<h1>Before you continue</h1><button disabled>Accept all</button><div inert><button>Reject all</button></div>',
+    'https://consent.google.com/ml?continue=x',
+  );
+  expect(await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)).toMatchObject({
+    status: 'consent',
+    interactiveVerification: false,
+    records: [],
+  });
+});
+
+test('recognizes a consent form shown on the Scholar page itself when no results are displayed', async ({
+  page,
+}) => {
+  await fixture(page, consentForm);
+  expect(await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)).toMatchObject({
+    status: 'consent',
+    interactiveVerification: true,
+  });
+});
+
+test('keeps reading displayed results when a page also carries a consent form', async ({
+  page,
+}) => {
+  await fixture(page, result('one', 'A displayed result') + consentForm);
+  expect(await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)).toMatchObject({ status: 'results' });
+});
+
+test('does not treat a look-alike consent host as a consent page', async ({ page }) => {
+  await fixture(page, consentForm, 'https://consent.google.com.evil.example/ml');
+  expect(await page.evaluate(SCHOLAR_CAPTURE_SCRIPT)).toMatchObject({
+    status: 'unsupported',
+    interactiveVerification: false,
+  });
+});
+
+test('rejects a rendered consent page with a clear message', async ({ page }) => {
+  await fixture(page, consentForm, 'https://consent.google.com/ml?continue=x');
+  const raw = await page.evaluate(SCHOLAR_CAPTURE_SCRIPT);
+  expect(() => normalizeScholarPage(raw)).toThrow(/cookie consent/);
+});

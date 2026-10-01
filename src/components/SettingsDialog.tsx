@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Download, ExternalLink, ShieldCheck } from 'lucide-react';
 import Modal from './Modal';
 import { client } from '../services/client';
@@ -9,20 +9,25 @@ export default function SettingsDialog({
   onSave,
   onClose,
   onBackup,
+  backupUnavailable,
 }: {
   settings: Settings;
   onSave: (settings: Settings) => Promise<void>;
   onClose: () => void;
   onBackup: () => void;
+  /** Why a backup cannot be made right now (for example, while the saved workspace is unreadable). */
+  backupUnavailable?: string;
 }) {
   const [draft, setDraft] = useState(settings);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const id = useId();
   return (
     <Modal
       title="Workspace settings"
       description="Your research stays on your computer."
       onClose={onClose}
+      dirty={JSON.stringify(draft) !== JSON.stringify(settings)}
     >
       <form
         onSubmit={async (e) => {
@@ -57,7 +62,9 @@ export default function SettingsDialog({
             onChange={(e) => setDraft({ ...draft, email: e.target.value })}
             placeholder="you@university.edu"
           />
-          <small>Sent to Crossref, OpenAlex, and NCBI to identify polite API requests.</small>
+          <small>
+            Sent only to Crossref, to identify polite API requests. No other source receives it.
+          </small>
         </label>
         {(
           [
@@ -66,45 +73,53 @@ export default function SettingsDialog({
             ['ncbiApiKey', 'NCBI / PubMed', 'https://www.ncbi.nlm.nih.gov/account/'],
           ] as const
         ).map(([key, name, url]) => (
-          <label className="field" key={key}>
+          // The "Get a key" button sits outside the label, so the label names only the field.
+          <div className="field" key={key}>
             <span className="field-title">
-              {name} API key{' '}
+              <label htmlFor={`${id}-${key}`}>{name} API key</label>
               <button
                 type="button"
                 className="text-button"
                 onClick={() => void client.openExternal(url)}
               >
-                Get a key
+                Get a key<span className="sr-only"> for {name}</span>
                 <ExternalLink size={12} />
               </button>
             </span>
             <input
+              id={`${id}-${key}`}
               type="password"
               autoComplete="off"
               value={draft[key]}
               onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
               placeholder="Optional personal API key"
             />
-          </label>
+          </div>
         ))}
         <p className="field-help">
           Public endpoints can be rate limited. Free personal keys can improve access. Searches go
           directly to the sources you select; access terms are set by each provider.
         </p>
-        <button type="button" className="button secondary full-width" onClick={onBackup}>
+        <button
+          type="button"
+          className="button secondary full-width"
+          onClick={onBackup}
+          disabled={Boolean(backupUnavailable)}
+        >
           <Download size={16} />
           Back up workspace as JSON
         </button>
         <p className="field-help">
-          Includes saved searches, screening decisions, tags, and notes. API keys are excluded.
-          Restore with Import publications.
+          {backupUnavailable ??
+            'Includes saved searches, screening decisions, tags, and notes. API keys are excluded. Restore with Import publications.'}
         </p>
-        {error && (
-          <p className="inline-error" role="alert">
-            {error}
-          </p>
-        )}
         <div className="modal-footer">
+          {/* In the footer, which stays in view, next to the button that was just pressed. */}
+          {error && (
+            <p className="inline-error" role="alert">
+              {error}
+            </p>
+          )}
           <button type="button" className="button secondary" onClick={onClose}>
             Cancel
           </button>

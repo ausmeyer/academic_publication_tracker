@@ -1,15 +1,22 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ArrowRight, Search, UserRound, Fingerprint, Check, ExternalLink } from 'lucide-react';
 import Modal from './Modal';
 import { SOURCES, sourceMark } from '../catalog';
+import { RESULT_LIMITS, nearestLimit } from '../library';
 import type { SearchQuery, SourceId } from '../types';
 
 export default function SearchDialog({
   initial,
+  failure,
+  warning,
   onClose,
   onSearch,
 }: {
   initial?: Partial<SearchQuery>;
+  /** Why the previous attempt failed, when the dialog reopens with the same query. */
+  failure?: string;
+  /** Shown when the workspace is nearly full. */
+  warning?: string;
   onClose: () => void;
   onSearch: (query: SearchQuery) => void;
 }) {
@@ -22,8 +29,12 @@ export default function SearchDialog({
   );
   const [from, setFrom] = useState(initial?.yearFrom?.toString() ?? '');
   const [to, setTo] = useState(initial?.yearTo?.toString() ?? '');
-  const [limit, setLimit] = useState(initial?.limit ?? 100);
-  const [error, setError] = useState('');
+  const [limit, setLimit] = useState(nearestLimit(initial?.limit));
+  const [error, setError] = useState(failure ?? '');
+  const baseline = useRef(JSON.stringify([text, mode, sources, from, to, limit]));
+  // Reopened after a failure, everything in it was typed by the person.
+  const dirty =
+    Boolean(failure) || baseline.current !== JSON.stringify([text, mode, sources, from, to, limit]);
   const scholarSelected = sources.includes('scholar');
   function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -53,9 +64,15 @@ export default function SearchDialog({
       title="Start a new search"
       description="Find the literature. Keep the context."
       onClose={onClose}
+      dirty={dirty}
       wide
     >
       <form onSubmit={submit}>
+        {warning && (
+          <p className="capacity-note" role="note">
+            {warning}
+          </p>
+        )}
         <div className="search-modes" role="group" aria-label="Search type">
           {(
             [
@@ -67,6 +84,7 @@ export default function SearchDialog({
             <button
               type="button"
               className={mode === id ? 'active' : ''}
+              aria-pressed={mode === id}
               onClick={() => setMode(id)}
               key={id}
             >
@@ -126,12 +144,13 @@ export default function SearchDialog({
             />
           </label>
           <label className="field">
-            {scholarSelected ? 'Collection limit' : 'Results per source'}
+            Results per source
             <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
-              <option value={25}>25 publications</option>
-              <option value={50}>50 publications</option>
-              <option value={100}>100 publications</option>
-              <option value={200}>200 publications</option>
+              {RESULT_LIMITS.map((option) => (
+                <option value={option} key={option}>
+                  {option} publications
+                </option>
+              ))}
             </select>
           </label>
         </div>
@@ -150,11 +169,7 @@ export default function SearchDialog({
                 checked={sources.includes(s.id)}
                 onChange={() =>
                   setSources((prev) =>
-                    prev.includes(s.id)
-                      ? prev.filter((x) => x !== s.id)
-                      : s.id === 'scholar'
-                        ? ['scholar']
-                        : [...prev.filter((id) => id !== 'scholar'), s.id],
+                    prev.includes(s.id) ? prev.filter((x) => x !== s.id) : [...prev, s.id],
                   )
                 }
               />
@@ -187,8 +202,10 @@ export default function SearchDialog({
                   : 'The installed desktop app collects Scholar results internally. This web preview opens Google Scholar in your browser; use Import to add exported BibTeX files.'}
               </p>
               <p>
-                Google Scholar runs separately from the API sources. Your collection contains only
-                the pages retrieved, up to your collection limit.
+                You can combine Scholar with PubMed or other sources. API searches run first, then
+                Scholar; matching publications are merged into one saved search, preserving
+                source-specific citation counts and preferring complete author lists. Each source is
+                limited to the selected number of results.
               </p>
             </div>
           </div>
@@ -198,17 +215,22 @@ export default function SearchDialog({
             and retrieval date.
           </p>
         )}
-        {error && (
-          <p className="inline-error" role="alert">
-            {error}
-          </p>
-        )}
         <div className="modal-footer">
+          {/* In the footer, which stays in view, next to the button that was just pressed. */}
+          {error && (
+            <p className="inline-error" role="alert">
+              {error}
+            </p>
+          )}
           <button type="button" className="button secondary" onClick={onClose}>
             Cancel
           </button>
           <button className="button primary" type="submit">
-            {scholarSelected && !window.desktop ? 'Open Google Scholar' : 'Search publications'}
+            {scholarSelected && !window.desktop
+              ? sources.length === 1
+                ? 'Open Google Scholar'
+                : 'Search sources and open Scholar'
+              : 'Search publications'}
             <ArrowRight size={16} />
           </button>
         </div>

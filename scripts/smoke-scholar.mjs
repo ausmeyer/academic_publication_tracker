@@ -82,98 +82,155 @@ try {
       clear(entry[0]);
       entry[1].fire();
     };
+    // Every search must share one in-memory partition (a session can never be freed), so the
+    // synthetic host is installed once per session and reads the current fixture on every request.
+    globalThis.__partitions = [];
+    globalThis.__fixtureSessions = new WeakSet();
+    const row = (id, title = `Synthetic publication ${id}`, citations = 12) =>
+      `<div class="gs_r gs_or gs_scl" data-cid="${id}"><h3 class="gs_rt"><a href="https://example.org/paper/${id}">${title}</a></h3><div class="gs_a">R Example, T Researcher - Example Journal, 2024 - example.org</div><div class="gs_rs">Synthetic bibliographic snippet.</div><div class="gs_fl"><a href="/scholar?cites=${id}">Cited by ${citations}</a></div></div>`;
+    const html = (content, next = '') =>
+      `<!doctype html><html><head><title>Google Scholar synthetic fixture</title></head><body>${content}${next ? `<a aria-label="Next" href="${next}">Next</a>` : ''}<a id="external" href="https://example.org/blocked">External paper</a><a id="popup" target="_blank" href="https://example.org/popup">Popup</a></body></html>`;
+    const consentPage = (continueUrl) =>
+      `<!doctype html><html><head><title>Before you continue to Google</title></head><body><h1>Before you continue to Google</h1><form action="https://consent.google.com/save" method="post"><input type="hidden" name="continue" value="${continueUrl}"><button id="reject" type="submit" name="set_eom" value="true">Reject all</button><button id="accept" type="submit" name="set_eom" value="false">Accept all</button></form></body></html>`;
+    globalThis.__fixtureHtml = { row, html };
     const fromPartition = session.fromPartition.bind(session);
-    session.fromPartition = (partition, options) => {
-      const isolated = fromPartition(partition, options);
-      if (!partition.startsWith('apt-scholar-')) return isolated;
+    const handler = async (request) => {
       const fixture = globalThis.__fixture;
-      const row = (id, title = `Synthetic publication ${id}`, citations = 12) =>
-        `<div class="gs_r gs_or gs_scl" data-cid="${id}"><h3 class="gs_rt"><a href="https://example.org/paper/${id}">${title}</a></h3><div class="gs_a">R Example, T Researcher - Example Journal, 2024 - example.org</div><div class="gs_rs">Synthetic bibliographic snippet.</div><div class="gs_fl"><a href="/scholar?cites=${id}">Cited by ${citations}</a></div></div>`;
-      const html = (content, next = '') =>
-        `<!doctype html><html><head><title>Google Scholar synthetic fixture</title></head><body>${content}${next ? `<a aria-label="Next" href="${next}">Next</a>` : ''}<a id="external" href="https://example.org/blocked">External paper</a><a id="popup" target="_blank" href="https://example.org/popup">Popup</a></body></html>`;
-      fixture.resultHtml = html(row('verified'));
-      isolated.protocol.handle('https', async (request) => {
-        const url = new URL(request.url);
-        if (!['scholar.google.com', 'accounts.google.com'].includes(url.hostname))
-          return new Response('Blocked fixture host', { status: 403 });
-        if (!['/scholar', '/signin'].includes(url.pathname))
-          return new Response('Not found', { status: 404 });
-        const offset = Number(url.searchParams.get('start') || 0);
-        // Reproduce slow Chromium request dispatch after navigation starts (notably Rosetta).
-        if (fixture.mode === 'auto' && !offset)
-          await new Promise((resolve) => setTimeout(resolve, 1200));
-        fixture.requests.push({ url: url.href, at: Date.now() });
-        if ((fixture.mode === 'auto' && !offset) || fixture.mode === 'loading')
-          await new Promise((resolve) => {
-            fixture.release = resolve;
+      const url = new URL(request.url);
+      if (
+        !['scholar.google.com', 'accounts.google.com', 'consent.google.com'].includes(url.hostname)
+      )
+        return new Response('Blocked fixture host', { status: 403 });
+      if (!['/scholar', '/signin', '/ml', '/save'].includes(url.pathname))
+        return new Response('Not found', { status: 404 });
+      const offset = Number(url.searchParams.get('start') || 0);
+      const response = (body, status = 200) =>
+        new Response(body, { status, headers: { 'content-type': 'text/html' } });
+      // A cookie written by one search must be gone when the next search starts.
+      if (url.hostname === 'scholar.google.com' && fixture.mode === 'cookies') {
+        const current = globalThis.__fixtureSession;
+        fixture.cookiesAtRequest = (await current.cookies.get({})).length;
+        await current.cookies.set({
+          url: 'https://scholar.google.com',
+          name: 'NID',
+          value: 'synthetic-tracking-cookie',
+        });
+        return response(html(row('cookie')));
+      }
+      if (fixture.mode === 'consent' || fixture.mode === 'consent-lookalike') {
+        if (url.hostname === 'consent.google.com' && url.pathname === '/ml')
+          return response(consentPage(url.searchParams.get('continue') || ''));
+        if (url.hostname === 'consent.google.com' && url.pathname === '/save') {
+          const body = new URLSearchParams(await request.text());
+          fixture.consentAccepted = true;
+          fixture.consentChoice = body.get('set_eom');
+          return new Response(null, {
+            status: 303,
+            headers: { location: body.get('continue') || 'https://scholar.google.com/scholar' },
           });
-        const response = (body, status = 200) =>
-          new Response(body, { status, headers: { 'content-type': 'text/html' } });
-        const next = `/scholar?hl=en&q=synthetic&start=${offset + 10}`;
-        if (fixture.mode === 'unstable')
-          return response(
-            html(`<div id="gs_ab_md">About 43 results</div>${row('changing')}<script>
+        }
+        if (!fixture.consentAccepted) {
+          fixture.requests.push({ url: url.href, at: Date.now() });
+          const target =
+            fixture.mode === 'consent'
+              ? `https://consent.google.com/ml?continue=${encodeURIComponent(url.href)}&hl=en`
+              : 'https://consent.google.com.evil.example/ml';
+          return new Response(null, { status: 302, headers: { location: target } });
+        }
+        fixture.requests.push({ url: url.href, at: Date.now() });
+        return response(html(row('after-consent')));
+      }
+      // Reproduce slow Chromium request dispatch after navigation starts (notably Rosetta).
+      if (fixture.mode === 'auto' && !offset)
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      fixture.requests.push({ url: url.href, at: Date.now() });
+      if ((fixture.mode === 'auto' && !offset) || fixture.mode === 'loading')
+        await new Promise((resolve) => {
+          fixture.release = resolve;
+        });
+      const next = `/scholar?hl=en&q=synthetic&start=${offset + 10}`;
+      if (fixture.mode === 'unstable')
+        return response(
+          html(`<div id="gs_ab_md">About 43 results</div>${row('changing')}<script>
             let count = 12;
             setInterval(() => { document.querySelector('.gs_fl a').textContent = 'Cited by ' + ++count; }, 100);
           </script>`),
+        );
+      if (fixture.mode === 'short')
+        return response(html(`<div id="gs_ab_md">About 43 results</div>${row('only-one')}`));
+      if (fixture.mode === 'settling') {
+        const rows = Array.from({ length: Math.min(10, 43 - offset) }, (_, index) =>
+          row(`settling-${offset + index}`),
+        ).join('');
+        const navigation = offset < 40 ? `<a aria-label="Next" href="${next}">Next</a>` : '';
+        if (!offset) {
+          const initial = Array.from({ length: 4 }, (_, index) => row(`settling-${index}`)).join(
+            '',
           );
-        if (fixture.mode === 'short')
-          return response(html(`<div id="gs_ab_md">About 43 results</div>${row('only-one')}`));
-        if (fixture.mode === 'settling') {
-          const rows = Array.from({ length: Math.min(10, 43 - offset) }, (_, index) =>
-            row(`settling-${offset + index}`),
-          ).join('');
-          const navigation = offset < 40 ? `<a aria-label="Next" href="${next}">Next</a>` : '';
-          if (!offset) {
-            const initial = Array.from({ length: 4 }, (_, index) => row(`settling-${index}`)).join(
-              '',
-            );
-            return response(
-              html(`<div id="results">${initial}</div><script>
+          return response(
+            html(`<div id="results">${initial}</div><script>
               setTimeout(() => { document.querySelector('#results').innerHTML = ${JSON.stringify(rows + navigation)}; }, 900);
             </script>`),
-            );
-          }
-          return response(html(rows + navigation));
-        }
-        if (fixture.mode === 'empty') return response(html('<p>No results found.</p>'));
-        if (fixture.mode === 'refusal')
-          return response(html('<p>Our systems have detected unusual traffic.</p>'), 429);
-        if (fixture.mode === 'accounts-error')
-          return url.hostname === 'scholar.google.com'
-            ? new Response(null, {
-                status: 302,
-                headers: { location: 'https://accounts.google.com/signin' },
-              })
-            : response(
-                '<html><head><title>Sign in</title></head><body><h1>This browser or app may not be secure</h1><button>Retry</button></body></html>',
-                403,
-              );
-        if (fixture.mode === 'bad-current' && !offset)
-          return new Response(null, {
-            status: 302,
-            headers: { location: 'https://scholar.google.com/scholar?hl=en&q=synthetic&start=200' },
-          });
-        if (fixture.mode === 'challenge')
-          return response(
-            html(
-              '<form id="captcha-form"><label>Human verification<input name="captcha"></label></form>',
-            ),
-            200,
           );
-        if (fixture.mode === 'partial-error' && offset)
-          return response(html('<h1>Service unavailable</h1>'), 503);
-        if (fixture.mode === 'bad-next')
-          return response(html(row('a'), '/scholar?hl=en&q=different&start=10'));
-        if (fixture.mode === 'many') return response(html(row(`paper-${offset}`), next));
-        if (fixture.mode === 'auto' && offset)
-          return response(html(row('a') + row('b', 'Second synthetic publication', 3) + row('c')));
-        if (fixture.mode === 'duplicate' && offset) return response(html(row('a'), next));
-        if (['auto', 'waiting', 'partial-error', 'duplicate'].includes(fixture.mode))
-          return response(html(row('a'), next));
-        return response(html(row('a')));
-      });
+        }
+        return response(html(rows + navigation));
+      }
+      if (fixture.mode === 'empty') return response(html('<p>No results found.</p>'));
+      if (fixture.mode === 'refusal')
+        return response(html('<p>Our systems have detected unusual traffic.</p>'), 429);
+      if (fixture.mode === 'accounts-error')
+        return url.hostname === 'scholar.google.com'
+          ? new Response(null, {
+              status: 302,
+              headers: { location: 'https://accounts.google.com/signin' },
+            })
+          : response(
+              '<html><head><title>Sign in</title></head><body><h1>This browser or app may not be secure</h1><button>Retry</button></body></html>',
+              403,
+            );
+      if (fixture.mode === 'bad-current' && !offset)
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://scholar.google.com/scholar?hl=en&q=synthetic&start=200' },
+        });
+      if (fixture.mode === 'challenge')
+        return response(
+          html(
+            '<form id="captcha-form"><label>Human verification<input name="captcha"></label></form>',
+          ),
+          200,
+        );
+      if (fixture.mode === 'partial-error' && offset)
+        return response(html('<h1>Service unavailable</h1>'), 503);
+      if (fixture.mode === 'bad-next')
+        return response(html(row('a'), '/scholar?hl=en&q=different&start=10'));
+      if (fixture.mode === 'many') return response(html(row(`paper-${offset}`), next));
+      if (fixture.mode === 'auto' && offset)
+        return response(html(row('a') + row('b', 'Second synthetic publication', 3) + row('c')));
+      if (fixture.mode === 'duplicate' && offset) return response(html(row('a'), next));
+      if (['auto', 'waiting', 'partial-error', 'duplicate'].includes(fixture.mode))
+        return response(html(row('a'), next));
+      return response(html(row('a')));
+    };
+    session.fromPartition = (partition, options) => {
+      const isolated = fromPartition(partition, options);
+      if (!partition.startsWith('apt-scholar')) return isolated;
+      globalThis.__partitions.push(partition);
+      globalThis.__fixtureSession = isolated;
+      if (!globalThis.__fixtureSessions.has(isolated)) {
+        globalThis.__fixtureSessions.add(isolated);
+        isolated.protocol.handle('https', handler);
+      }
       return isolated;
+    };
+  });
+  // Quitting while a search only waits for the user asks first; the test answers that dialog.
+  await application.evaluate(({ dialog }) => {
+    globalThis.__quitAnswer = 1;
+    globalThis.__quitAsked = 0;
+    dialog.showMessageBox = async () => {
+      globalThis.__quitAsked += 1;
+      return { response: globalThis.__quitAnswer, checkboxChecked: false };
     };
   });
   await workspace.evaluate(() => {
@@ -184,7 +241,14 @@ try {
   });
   async function begin(mode, limit = 10) {
     await application.evaluate((_electron, mode) => {
-      globalThis.__fixture = { mode, requests: [], shown: 0, hidden: 0 };
+      const { row, html } = globalThis.__fixtureHtml;
+      globalThis.__fixture = {
+        mode,
+        requests: [],
+        shown: 0,
+        hidden: 0,
+        resultHtml: html(row('verified')),
+      };
     }, mode);
     const opening = application.waitForEvent('window');
     await workspace.evaluate((limit) => {
@@ -368,6 +432,11 @@ try {
   await expect(challenge.locator('#status')).toContainText('New windows are disabled');
   await application.evaluate(({ app }) => app.quit());
   await expect(challenge.locator('#status')).toContainText('before closing the app');
+  assert.equal(
+    await application.evaluate(() => globalThis.__quitAsked),
+    1,
+    'A search that only waits for the user asks before the app quits.',
+  );
   await application.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()
       .find((window) => !window.getTitle().startsWith('Google Scholar'))
@@ -399,6 +468,40 @@ try {
     assert.ok(result.results[0].error, `${mode} must return a source error.`);
     assert.equal((await fixture()).shown, 0, `${mode} must not enter indefinite verification.`);
   }
+  // Google's cookie-consent interstitial (EU/UK): only the user chooses; collection then continues.
+  const consent = await begin('consent');
+  await phase('verification');
+  assert.equal((await fixture()).shown, 1, 'The consent page is shown so the user can choose.');
+  await expect(consent.locator('#status')).toContainText('cookie consent');
+  assert.equal(
+    await application.evaluate(() =>
+      [...globalThis.__scholarTimers.values()].some((timer) => timer.milliseconds > 60000),
+    ),
+    false,
+    'Waiting for the user pauses the search deadline.',
+  );
+  assert.equal((await fixture()).requests.length, 1);
+  await remoteAction('document.querySelector("#reject").click()');
+  const consented = await completed();
+  assert.equal(consented.results[0].works.length, 1);
+  assert.equal(consented.results[0].error, undefined);
+  assert.equal(await application.evaluate(() => globalThis.__fixture.consentAccepted), true);
+  assert.ok((await fixture()).hidden >= 1, 'The window hides again after the user has chosen.');
+  await begin('consent-lookalike', 1);
+  const lookalike = await completed();
+  assert.equal(lookalike.results[0].works.length, 0);
+  assert.match(lookalike.results[0].error, /redirected outside/);
+  assert.equal((await fixture()).shown, 0, 'A look-alike consent host never reaches the user.');
+  for (let run = 0; run < 2; run += 1) {
+    await begin('cookies', 1);
+    assert.equal((await completed()).results[0].works.length, 1);
+  }
+  assert.equal(
+    await application.evaluate(() => globalThis.__fixture.cookiesAtRequest),
+    0,
+    'Cookies written by one search must be gone when the next search starts.',
+  );
+
   await begin('empty');
   const empty = await completed();
   assert.equal(empty.results[0].works.length, 0);
@@ -427,6 +530,14 @@ try {
   await phase('waiting');
   await control('show');
   assert.equal((await fixture()).shown, 1);
+  const askedBefore = await application.evaluate(() => globalThis.__quitAsked);
+  await application.evaluate(({ app }) => app.quit());
+  await expect(shown.locator('#status')).toContainText('before closing the app');
+  assert.equal(
+    await application.evaluate(() => globalThis.__quitAsked),
+    askedBefore,
+    'A search that is retrieving pages must be stopped first; it is not a question.',
+  );
   await shown.close();
   assert.equal(
     (await completed()).results[0].works.length,
@@ -484,6 +595,14 @@ try {
   assert.match(capped.results[0].warning, /20-page/);
   assert.equal((await fixture()).requests.length, 20);
   assert.equal((await fixture()).shown, 0);
+  const partitions = await application.evaluate(() => globalThis.__partitions);
+  assert.ok(partitions.length >= 10, 'Every search asks for its browsing session.');
+  assert.equal(
+    new Set(partitions).size,
+    1,
+    'Every search must reuse one in-memory session; a session cannot be freed.',
+  );
+  assert.equal(partitions[0].startsWith('persist:'), false, 'The Scholar session is never saved.');
   await workspace.evaluate(() => window.__unsubscribe());
   await control('cancel');
   assert.equal(
@@ -497,10 +616,27 @@ try {
     }),
     true,
   );
-  await application.close();
+  // Waiting for Google verification has no end of its own: after a confirmation the app may quit.
+  await application.evaluate(() => {
+    globalThis.__quitAnswer = 0;
+  });
+  await workspace.evaluate(() => {
+    window.__unsubscribe = window.desktop.onScholarProgress((progress) =>
+      window.__scholarEvents.push(progress),
+    );
+  });
+  await begin('challenge');
+  await phase('verification');
+  const asked = await application.evaluate(() => globalThis.__quitAsked);
+  const exited = application.waitForEvent('close');
+  await application.evaluate(({ app }) => {
+    setTimeout(() => app.quit(), 0);
+  });
+  await exited;
   application = undefined;
+  assert.ok(asked >= 1);
   console.log(
-    'Automatic Scholar native smoke passed: hidden paced paging; delayed rendering from 4 to 43 records; unstable and incomplete result notices; isolation and sender guards; user-only verification/resume; source refusals; empty results; partial errors; safe URLs; stop/cancel during load and wait; close/quit guards; timeouts; renderer failure; duplicate and 20-page caps.',
+    'Automatic Scholar native smoke passed: hidden paced paging; delayed rendering from 4 to 43 records; unstable and incomplete result notices; isolation and sender guards; user-only verification/resume; source refusals; empty results; partial errors; safe URLs; stop/cancel during load and wait; close/quit guards and the quit confirmation while waiting for the user; cookie-consent interstitial and look-alike hosts; one reused in-memory session that is wiped between searches; timeouts; renderer failure; duplicate and 20-page caps.',
   );
 } finally {
   if (application) {

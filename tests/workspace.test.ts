@@ -22,7 +22,7 @@ const work: Work = {
   tags: [],
 };
 const workspace = (works: Work[]): Workspace => ({
-  version: 1,
+  version: 2,
   activeId: 'search',
   snapshots: [
     {

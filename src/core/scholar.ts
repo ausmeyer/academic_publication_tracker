@@ -46,6 +46,16 @@ export function buildScholarUrl(query: SearchQuery): string {
   return url.href;
 }
 
+/**
+ * Google's cookie-consent interstitial (shown first to EU/UK visitors) lives on consent.google.<tld>.
+ * Country domains are a closed shape (com, cat, xx, co.xx, com.xx), so look-alike hosts such as
+ * consent.google.com.example never match.
+ */
+const CONSENT_HOST = /^consent\.google\.(?:com|cat|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2})$/;
+export function isScholarConsentHost(hostname: string): boolean {
+  return CONSENT_HOST.test(hostname);
+}
+
 // Executed during a user-requested search in the isolated Scholar window.
 // This script reads the rendered page; it makes no requests and never clicks or paginates.
 export const SCHOLAR_CAPTURE_SCRIPT = String.raw`(() => {
@@ -72,19 +82,33 @@ export const SCHOLAR_CAPTURE_SCRIPT = String.raw`(() => {
     } catch { return ''; }
   };
   const displayed = (selector) => Array.from(document.querySelectorAll(selector)).filter(visible);
+  const usable = (control) => visible(control) && !control.matches(':disabled') && !control.readOnly
+    && !control.closest('[inert], [aria-disabled="true"]') && getComputedStyle(control).pointerEvents !== 'none';
   const result = { version: 1, url: location.href, title: clean(document.title),
     status: 'unsupported', records: [], truncated: false, nextUrl: null, interactiveVerification: false, estimatedTotal: null };
   const pageText = content(document.body, 20000);
+  const profile = location.pathname === '/citations';
+  const rows = displayed(profile ? '.gsc_a_tr' : '.gs_r.gs_or');
+  // A results page titles itself "<query> - Google Scholar" and snippets may quote error messages, so
+  // wording alone is a refusal only when no result rows are displayed and the title is not a query title.
+  const wording = rows.length === 0;
+  const ownTitle = !/\s[-–−]\s*Google Scholar\s*$/i.test(document.title);
   const captchaControls = displayed('#captcha-form input:not([type="hidden"]), #gs_captcha_ccl input:not([type="hidden"]), .g-recaptcha, iframe[src*="recaptcha"], form[action*="/sorry/"] input:not([type="hidden"])').length > 0;
   if (displayed('#captcha-form, #gs_captcha_ccl, .g-recaptcha, iframe[src*="recaptcha"], form[action*="/sorry/"]').length
-    || /our systems have detected unusual traffic|to continue, please type the characters below|please show you're not a robot/i.test(pageText)) {
+    || (wording && /our systems have detected unusual traffic|to continue, please type the characters below|please show you're not a robot/i.test(pageText))) {
     result.status = 'captcha'; result.interactiveVerification = captchaControls; return result;
   }
-  if (/^sign in\b/i.test(document.title) || displayed('input[type="password"]').length
+  // The consent interstitial is not a refusal: the user chooses an option there and the search continues.
+  if (/${CONSENT_HOST.source}/.test(location.hostname)
+    || (wording && location.origin === 'https://scholar.google.com'
+      && displayed('form[action*="consent.google."]').length)) {
+    result.status = 'consent';
+    result.interactiveVerification = displayed('button, input[type="submit"], input[type="button"], [role="button"]').some(usable);
+    return result;
+  }
+  if ((wording && ownTitle && /^sign in\b/i.test(document.title)) || displayed('input[type="password"]').length
     || location.hostname === 'accounts.google.com') {
     result.status = 'login';
-    const usable = (control) => visible(control) && !control.matches(':disabled') && !control.readOnly
-      && !control.closest('[inert], [aria-disabled="true"]') && getComputedStyle(control).pointerEvents !== 'none';
     const loginInputs = displayed('input[type="password"], input[type="email"], input[name="identifier"], input[name="Passwd"], input[name="totpPin"], input[name="idvPin"]').some(usable);
     const accountChoices = location.hostname === 'accounts.google.com'
       && displayed('[role="link"][data-identifier], [role="button"][data-identifier], button[data-identifier], [role="link"][data-email], [role="button"][data-email], button[data-email]')
@@ -95,15 +119,13 @@ export const SCHOLAR_CAPTURE_SCRIPT = String.raw`(() => {
   }
   if (location.origin !== 'https://scholar.google.com'
     || !['/scholar', '/citations'].includes(location.pathname)) return result;
-  if (/service unavailable|too many requests|access denied|^error\b/i.test(document.title)
-    || /sorry, we can't complete your request|your client does not have permission/i.test(pageText)) {
+  if (wording && ((ownTitle && /service unavailable|too many requests|access denied|^error\b/i.test(document.title))
+    || /sorry, we can't complete your request|your client does not have permission/i.test(pageText))) {
     result.status = 'unavailable'; return result;
   }
-  const profile = location.pathname === '/citations';
-  const rows = displayed(profile ? '.gsc_a_tr' : '.gs_r.gs_or');
   result.truncated = rows.length > 200;
   const year = (value) => {
-    const match = value.match(/\b(1\d{3}|2\d{3})\b/);
+    const match = value.match(/\b((?:1[5-9]|20)\d{2})\b/);
     return match ? Number(match[1]) : null;
   };
   for (const row of rows.slice(0, 200)) {
@@ -126,8 +148,11 @@ export const SCHOLAR_CAPTURE_SCRIPT = String.raw`(() => {
       const parts = metadata.split(/\s+[-–−]\s+/);
       authorsText = parts[0] || '';
       const publication = parts[1] || '';
-      publicationYear = year(publication);
-      venue = publication.replace(/(?:,\s*)?\b(?:1\d{3}|2\d{3})\b.*$/, '').trim();
+      // "Venue, Year": only a trailing year is the publication year. Earlier numbers belong to the
+      // venue (arXiv identifiers, conference years, volumes) and stay in it.
+      const tail = publication.match(/^(.*?)(?:,\s*|\s+)?\b((?:1[5-9]|20)\d{2})$/);
+      publicationYear = tail ? Number(tail[2]) : null;
+      venue = (tail ? tail[1] : publication).trim();
       const citation = Array.from(row.querySelectorAll('.gs_fl a[href]')).find((node) => {
         try { return visible(node) && new URL(href(node)).searchParams.has('cites'); } catch { return false; }
       });
@@ -138,7 +163,8 @@ export const SCHOLAR_CAPTURE_SCRIPT = String.raw`(() => {
     }
     const authors = authorsText.split(/,\s*/).map((name) => clean(name.replace(/(?:\.{3}|…).*$/, '')
       .replace(/\bet al\.?\s*$/i, ''), 300)).filter(Boolean).slice(0, 100);
-    result.records.push({ sourceId: clean(sourceId, 256), title, authors, year: publicationYear,
+    const authorsComplete = !!authors.length && !/(?:\.{3}|…|\bet al\b)/i.test(authorsText) && authors.length < 100;
+    result.records.push({ sourceId: clean(sourceId, 256), title, authors, authorsComplete, year: publicationYear,
       venue, snippet: profile ? '' : content(row.querySelector('.gs_rs'), 10000),
       url: href(link), citationText,
       type: /^\[CITATION\]/i.test(headingText) ? 'citation' : /^\[BOOK\]/i.test(headingText) ? 'book' : 'publication' });
@@ -176,7 +202,7 @@ export const SCHOLAR_SETTLED_CAPTURE_SCRIPT = `new Promise((resolve) => {
     const page = ${SCHOLAR_CAPTURE_SCRIPT};
     const now = performance.now(), signature = JSON.stringify(page);
     if (signature !== previous) { previous = signature; changedAt = now; }
-    const supported = ['results', 'empty', 'captcha', 'login', 'unavailable'].includes(page.status);
+    const supported = ['results', 'empty', 'captcha', 'login', 'consent', 'unavailable'].includes(page.status);
     const settled = document.readyState === 'complete' && supported
       && now - started >= 1500 && now - changedAt >= 500;
     if (settled || now - started >= 5000) resolve({ ...page, settled });
@@ -311,6 +337,10 @@ export function normalizeScholarPage(
     throw new Error(
       'Google Scholar is showing a CAPTCHA or unusual-traffic check. If a verification control is available, complete it yourself in the Scholar window to continue retrieval.',
     );
+  if (page.status === 'consent')
+    throw new Error(
+      'Google is asking for cookie consent. Choose an option yourself in the Scholar window to continue retrieval.',
+    );
   const sourceUrl = safeUrl(page.url);
   const url = sourceUrl ? new URL(sourceUrl) : null;
   if (
@@ -371,6 +401,7 @@ export function normalizeScholarPage(
       id: `scholar:${sourceId}`,
       title,
       authors,
+      authorsComplete: item.authorsComplete === true,
       year,
       venue: text(item.venue),
       doi,

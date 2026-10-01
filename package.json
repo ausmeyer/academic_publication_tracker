@@ -1,6 +1,6 @@
 {
   "name": "academic-publication-tracker",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "private": true,
   "description": "An open-source desktop workspace for scholarly discovery and transparent citation metrics.",
   "author": "Academic Publication Tracker contributors",
@@ -9,7 +9,7 @@
   "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build && node scripts/build-electron.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/build-electron.mjs && node scripts/generate-licenses.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -23,22 +23,21 @@
     "test:scholar": "npm run build && node scripts/smoke-scholar.mjs",
     "dist:mac:signed": "npm run build && electron-builder --mac --publish never && node scripts/verify-mac-signatures.mjs --distribution"
   },
-  "dependencies": {
-    "fast-xml-parser": "^5.11.1",
-    "lucide-react": "^1.46.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
-  },
   "devDependencies": {
+    "@electron/fuses": "^1.8.0",
     "@playwright/test": "^1.63.0",
     "@types/node": "^26.5.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
-    "electron": "^44.3.0",
+    "electron": "^44.5.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
+    "fast-xml-parser": "^5.11.1",
+    "lucide-react": "^1.46.0",
     "prettier": "^3.9.6",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "vitest": "^5.0.0"

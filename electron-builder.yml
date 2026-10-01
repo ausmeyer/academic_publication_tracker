@@ -12,11 +12,30 @@ files:
   - package.json
   - LICENSE
   - '!**/*.map'
+  - '!dist-electron/THIRD_PARTY_LICENSES.txt'
+# The notices of the bundled libraries (written by `npm run build`) sit next to the application.
+extraResources:
+  - from: dist-electron/THIRD_PARTY_LICENSES.txt
+    to: THIRD_PARTY_LICENSES.txt
+# Electron fuses are flipped in the packaged binary and cannot be changed afterwards.
+electronFuses:
+  runAsNode: false # ELECTRON_RUN_AS_NODE would let any local process run code as the signed app
+  enableNodeOptionsEnvironmentVariable: false # likewise NODE_OPTIONS
+  enableCookieEncryption: true
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  # Kept on: Playwright's Electron driver attaches through --inspect, and the packaged-app smoke
+  # checks (scripts/smoke-*.mjs --packaged) need it. Turning it off makes that launch time out.
+  enableNodeCliInspectArguments: true
+  # Kept on: the window is loaded from file://; turning it off needs a custom protocol first.
+  grantFileProtocolExtraPrivileges: true
 artifactName: Academic-Publication-Tracker-${version}-${os}-${arch}.${ext}
 mac:
   forceCodeSigning: true
   category: public.app-category.education
   hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
   target:
     - target: dmg

@@ -11,3 +11,5 @@ An open-source desktop app for finding publications, tracking citations, and org
 Mac apps are signed and Apple-notarized. Windows is an unsigned preview.
 
 [User guide](docs/USER_GUIDE.md) · [MIT license](LICENSE)
+
+Testing the local development features? See [Research Insights and local startup](docs/LOCAL_INSIGHTS.md). These changes are not included in the published installers above.

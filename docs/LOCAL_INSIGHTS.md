@@ -1,6 +1,6 @@
-# Research Insights — development build
+# Research Insights
 
-These features are in the local source tree, not the published v0.4.3 installers. From the repository directory, run:
+These features are included in v0.5.0. To run the source tree locally, from the repository directory run:
 
 ```sh
 npm run desktop

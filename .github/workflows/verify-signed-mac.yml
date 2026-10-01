@@ -1,0 +1,48 @@
+name: Verify signed Mac release candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Draft release containing the signed ZIPs
+        required: true
+        default: v0.5.0
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Download and verify the exact signed candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+        run: |
+          destination="$RUNNER_TEMP/apt-candidate"
+          gh release download "$RELEASE_TAG" --pattern "*-mac-$CANDIDATE_ARCH.zip" --dir "$destination"
+          ditto -xk "$destination/"*.zip "$destination/extracted"
+          app="$destination/extracted/Academic Publication Tracker.app"
+          xattr -w com.apple.quarantine '0081;00000000;GitHub Actions;' "$app"
+          node scripts/verify-mac-signatures.mjs --distribution "$app"
+          node scripts/smoke-electron.mjs "$app/Contents/MacOS/Academic Publication Tracker"
+          node scripts/smoke-scholar.mjs "$app/Contents/MacOS/Academic Publication Tracker"

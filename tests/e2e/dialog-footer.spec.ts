@@ -66,7 +66,8 @@ test.describe('dialog buttons stay reachable at the smallest window size', () =>
   }) => {
     await seedOnce(page, workspaceOf([snapshotOf('s1', 'A search', [work('a', 'Paper A')])]));
     await page.reload();
-    await page.getByRole('button', { name: 'Export', exact: true }).first().click();
+    await page.getByLabel('Search actions', { exact: true }).click();
+    await page.getByRole('button', { name: 'Rename search' }).click();
     const dialog = page.getByRole('dialog');
     await dialog.waitFor();
     await settled(page); // measure after the enter animation, not during it

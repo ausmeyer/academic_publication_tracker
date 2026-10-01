@@ -39,6 +39,8 @@
 
 ### Interface
 
+- Search actions opens through a synchronous state update, so an immediate Escape closes it reliably.
+
 - Notes save automatically as you type and are flushed when you leave the field, switch papers or quit. Tags are chips you add and remove one at a time, so imported keywords that contain commas are no longer split apart.
 - Results that cannot be saved (size, 500 searches, 100,000 papers, a bad record) stay in a banner you can retry, export, or make room for; several sets can be held at once and a later search or import never drops them; making room deletes nothing unless the results then fit; a warning appears above 90% of any limit. Escape or an outside click asks before discarding typed input; a failed search reopens the dialog with its query, or reports in the error banner when another dialog is open.
 - An edit the workspace refuses (a note, tag or name when it is full) is kept on screen, counted as unsaved, retried, and asked about at quit instead of being dropped; form errors sit above the dialog buttons, the sticky dialog footer never hides the control you tabbed to, an IME's confirming Enter no longer adds a tag, a half-typed tag is not added just because you switched apps, and the refresh note no longer claims a removed snapshot is kept.

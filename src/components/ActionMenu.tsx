@@ -35,13 +35,14 @@ export default function ActionMenu({
     setOpen(false);
   };
   return (
-    <details
-      ref={details}
-      className="action-menu"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary aria-label={label}>
+    <details ref={details} className="action-menu" open={open}>
+      <summary
+        aria-label={label}
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+      >
         <MoreHorizontal size={20} />
       </summary>
       <div>{children(close)}</div>

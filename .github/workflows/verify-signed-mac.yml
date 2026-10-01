@@ -9,7 +9,7 @@ on:
         default: v0.5.0
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
